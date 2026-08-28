@@ -2,9 +2,15 @@ import { ArrowRight } from "lucide-react";
 import Image from "next/image";
 
 import { MoodIcon } from "@/components/ui/mood-icon";
-import { moods, recentMoments } from "@/data/moments";
+import { moods, recentMoments, type Moment } from "@/data/moments";
 
-export function RecentMoments() {
+type RecentMomentsProps = {
+  moments?: readonly Moment[];
+};
+
+export function RecentMoments({
+  moments = recentMoments,
+}: RecentMomentsProps) {
   return (
     <section
       id="moments"
@@ -32,7 +38,7 @@ export function RecentMoments() {
         </div>
 
         <div className="border-x border-white/[0.08]">
-          {recentMoments.map((moment, index) => {
+          {moments.map((moment, index) => {
             const mood = moods.find((item) => item.id === moment.mood);
             const reverse = index % 2 === 1;
 
@@ -52,10 +58,18 @@ export function RecentMoments() {
                       alt={moment.image.alt}
                       width={1536}
                       height={1024}
+                      unoptimized={moment.image.src.startsWith("data:")}
                       sizes="(max-width: 639px) calc(100vw - 40px), (max-width: 899px) calc(100vw - 64px), (max-width: 1023px) calc((100vw - 64px) / 2), (max-width: 1439px) calc((100vw - 96px) / 2), 672px"
                       className="h-full w-full object-cover transition duration-700 group-hover:scale-[1.025]"
                     />
-                  ) : null}
+                  ) : (
+                    <div className="flex h-full flex-col items-center justify-center gap-3 bg-[radial-gradient(circle_at_center,rgba(143,67,84,0.12),transparent_62%)] text-rose-soft">
+                      <MoodIcon mood={moment.mood} className="size-10" />
+                      <span className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-secondary/85">
+                        A moment held close
+                      </span>
+                    </div>
+                  )}
                   <div className="pointer-events-none absolute inset-0 border border-white/[0.06] bg-background/5" />
                 </div>
 

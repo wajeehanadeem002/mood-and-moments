@@ -1,8 +1,19 @@
 import Image from "next/image";
 
 import { MoodRitual } from "@/components/home/mood-ritual";
+import type { MomentDraft } from "@/lib/moment-creation";
 
-export function Hero() {
+type HeroProps = {
+  isHydrating: boolean;
+  loadError: boolean;
+  onCreateMoment: (draft: MomentDraft) => Promise<void>;
+};
+
+export function Hero({
+  isHydrating,
+  loadError,
+  onCreateMoment,
+}: HeroProps) {
   return (
     <section
       aria-labelledby="hero-title"
@@ -53,7 +64,11 @@ export function Hero() {
           </p>
         </div>
 
-        <MoodRitual />
+        <MoodRitual
+          isHydrating={isHydrating}
+          loadError={loadError}
+          onCreateMoment={onCreateMoment}
+        />
       </div>
     </section>
   );

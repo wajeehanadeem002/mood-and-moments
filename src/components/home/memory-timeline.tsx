@@ -1,9 +1,15 @@
 import { ArrowRight, Circle } from "lucide-react";
 
 import { MoodIcon } from "@/components/ui/mood-icon";
-import { moods, timelineMoments } from "@/data/moments";
+import { moods, timelineMoments, type Moment } from "@/data/moments";
 
-export function MemoryTimeline() {
+type MemoryTimelineProps = {
+  moments?: readonly Moment[];
+};
+
+export function MemoryTimeline({
+  moments = timelineMoments,
+}: MemoryTimelineProps) {
   return (
     <section
       id="timeline"
@@ -27,7 +33,7 @@ export function MemoryTimeline() {
         </div>
 
         <ol className="timeline-list ml-2 border-y border-l border-white/[0.08] md:ml-0 md:border-l-0">
-          {timelineMoments.map((moment) => {
+          {moments.map((moment) => {
             const mood = moods.find((item) => item.id === moment.mood);
 
             return (

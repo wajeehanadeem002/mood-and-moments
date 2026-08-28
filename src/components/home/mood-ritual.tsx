@@ -1,17 +1,25 @@
 "use client";
 
-import { FormEvent, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useRef, useState } from "react";
 
 import { MoodIcon } from "@/components/ui/mood-icon";
 import { moods, type MoodId } from "@/data/moments";
 import {
-  createMomentConfirmation,
-  validateMomentText,
-} from "@/lib/mood-ritual";
+  type MomentDraft,
+  type MomentFieldErrors,
+  validateMomentDraft,
+  validateMomentImage,
+} from "@/lib/moment-creation";
 
 type Feedback = {
   kind: "error" | "success";
   message: string;
+};
+
+type MoodRitualProps = {
+  isHydrating: boolean;
+  loadError: boolean;
+  onCreateMoment: (draft: MomentDraft) => Promise<void>;
 };
 
 const accentText: Record<(typeof moods)[number]["accent"], string> = {
@@ -20,36 +28,147 @@ const accentText: Record<(typeof moods)[number]["accent"], string> = {
   rose: "text-rose-soft",
 };
 
-export function MoodRitual() {
+const fieldClassName =
+  "w-full rounded-sm border border-white/10 bg-background/55 px-4 py-3 text-[0.925rem] leading-6 text-primary outline-none transition placeholder:text-secondary/85 hover:border-white/20 focus:border-rose/65 focus:ring-2 focus:ring-rose/15";
+
+export function MoodRitual({
+  isHydrating,
+  loadError,
+  onCreateMoment,
+}: MoodRitualProps) {
   const [selectedMoodId, setSelectedMoodId] = useState<MoodId>("happy");
-  const [momentText, setMomentText] = useState("");
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [date, setDate] = useState("");
+  const [image, setImage] = useState<File | null>(null);
+  const [errors, setErrors] = useState<MomentFieldErrors>({});
   const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const submissionInProgressRef = useRef(false);
+  const titleRef = useRef<HTMLInputElement>(null);
+  const descriptionRef = useRef<HTMLTextAreaElement>(null);
+  const dateRef = useRef<HTMLInputElement>(null);
+  const imageRef = useRef<HTMLInputElement>(null);
   const selectedMood =
     moods.find((mood) => mood.id === selectedMoodId) ?? moods[0];
 
+  function clearFieldError(field: keyof MomentFieldErrors) {
+    setErrors((current) => {
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+    setFeedback(null);
+  }
+
   function selectMood(mood: MoodId) {
     setSelectedMoodId(mood);
-    if (feedback) {
-      setFeedback(null);
+    setFeedback(null);
+  }
+
+  function selectImage(event: ChangeEvent<HTMLInputElement>) {
+    const selectedImage = event.target.files?.[0] ?? null;
+    const imageError = selectedImage
+      ? validateMomentImage(selectedImage)
+      : null;
+
+    setImage(selectedImage);
+    setErrors((current) => {
+      const next = { ...current };
+      delete next.image;
+
+      if (imageError) {
+        next.image = imageError;
+      }
+
+      return next;
+    });
+    setFeedback(null);
+  }
+
+  function removeImage() {
+    setImage(null);
+    clearFieldError("image");
+
+    if (imageRef.current) {
+      imageRef.current.value = "";
     }
   }
 
-  function submitMoment(event: FormEvent<HTMLFormElement>) {
+  async function submitMoment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const validationMessage = validateMomentText(momentText);
 
-    if (validationMessage) {
-      setFeedback({ kind: "error", message: validationMessage });
-      textareaRef.current?.focus();
+    if (submissionInProgressRef.current) {
       return;
     }
 
-    setFeedback({
-      kind: "success",
-      message: createMomentConfirmation(selectedMood.label),
-    });
+    const draft: MomentDraft = {
+      title,
+      description,
+      mood: selectedMoodId,
+      date,
+      image,
+    };
+    const validationErrors = validateMomentDraft(draft);
+
+    if (Object.keys(validationErrors).length > 0) {
+      setErrors(validationErrors);
+      setFeedback(null);
+
+      if (validationErrors.title) {
+        titleRef.current?.focus();
+      } else if (validationErrors.description) {
+        descriptionRef.current?.focus();
+      } else if (validationErrors.date) {
+        dateRef.current?.focus();
+      } else {
+        imageRef.current?.focus();
+      }
+
+      return;
+    }
+
+    submissionInProgressRef.current = true;
+    setIsSubmitting(true);
+    setFeedback(null);
+
+    try {
+      await onCreateMoment(draft);
+      setTitle("");
+      setDescription("");
+      setDate("");
+      setImage(null);
+      setErrors({});
+      if (imageRef.current) {
+        imageRef.current.value = "";
+      }
+      setFeedback({ kind: "success", message: "Your moment has been saved." });
+    } catch {
+      setFeedback({
+        kind: "error",
+        message:
+          "We couldn’t save this moment. Check browser storage and try again.",
+      });
+    } finally {
+      submissionInProgressRef.current = false;
+      setIsSubmitting(false);
+    }
   }
+
+  const statusFeedback: Feedback = isSubmitting
+    ? { kind: "success", message: "Saving your moment…" }
+    : (feedback ??
+      (loadError
+        ? {
+            kind: "error",
+            message: "Your saved moments couldn’t be loaded in this browser.",
+          }
+        : {
+            kind: "success",
+            message: isHydrating
+              ? "Loading your saved moments…"
+              : "Your moments are saved in this browser.",
+          }));
 
   return (
     <section
@@ -70,104 +189,225 @@ export function MoodRitual() {
         </h2>
       </div>
 
-      <div
-        role="group"
-        className="mt-7 grid grid-cols-3 gap-2 sm:grid-cols-6"
-        aria-label="Choose a mood"
+      <form
+        aria-label="Create a Moment"
+        aria-busy={isSubmitting}
+        className="mt-7"
+        noValidate
+        onSubmit={submitMoment}
       >
-        {moods.map((mood) => {
-          const isSelected = selectedMood.id === mood.id;
-
-          return (
-            <button
-              key={mood.id}
-              type="button"
-              aria-pressed={isSelected}
-              data-selected={isSelected ? "true" : "false"}
-              data-accent={mood.accent}
-              className="mood-choice group flex min-h-[5.75rem] flex-col items-center justify-center gap-2 rounded-sm border border-white/10 bg-white/[0.025] px-2 py-3 text-secondary transition duration-300 hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/[0.045] hover:text-primary focus-visible:outline-none sm:min-h-[6.25rem]"
-              onClick={() => selectMood(mood.id)}
-            >
-              <MoodIcon
-                mood={mood.id}
-                className={`size-6 transition-transform duration-300 group-hover:scale-105 sm:size-7 ${accentText[mood.accent]}`}
-              />
-              <span className="text-xs font-medium sm:text-[0.8rem]">
-                {mood.label}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="mt-7 text-center" aria-live="polite">
-        <p className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-secondary/80">
-          You selected
-        </p>
         <div
-          className={`mt-2 flex items-center justify-center gap-2 ${accentText[selectedMood.accent]}`}
+          role="group"
+          className="grid grid-cols-3 gap-2 sm:grid-cols-6"
+          aria-label="Choose a mood"
         >
-          <MoodIcon mood={selectedMood.id} className="size-7" />
-          <p className="font-display text-3xl leading-none tracking-[-0.02em]">
-            {selectedMood.label}
+          {moods.map((mood) => {
+            const isSelected = selectedMood.id === mood.id;
+
+            return (
+              <button
+                key={mood.id}
+                type="button"
+                aria-pressed={isSelected}
+                data-selected={isSelected ? "true" : "false"}
+                data-accent={mood.accent}
+                className="mood-choice group flex min-h-[5.75rem] flex-col items-center justify-center gap-2 rounded-sm border border-white/10 bg-white/[0.025] px-2 py-3 text-secondary transition duration-300 hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/[0.045] hover:text-primary focus-visible:outline-none sm:min-h-[6.25rem]"
+                onClick={() => selectMood(mood.id)}
+              >
+                <MoodIcon
+                  mood={mood.id}
+                  className={`size-6 transition-transform duration-300 group-hover:scale-105 sm:size-7 ${accentText[mood.accent]}`}
+                />
+                <span className="text-xs font-medium sm:text-[0.8rem]">
+                  {mood.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-7 text-center" aria-live="polite">
+          <p className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-secondary/80">
+            You selected
+          </p>
+          <div
+            className={`mt-2 flex items-center justify-center gap-2 ${accentText[selectedMood.accent]}`}
+          >
+            <MoodIcon mood={selectedMood.id} className="size-7" />
+            <p className="font-display text-3xl leading-none tracking-[-0.02em]">
+              {selectedMood.label}
+            </p>
+          </div>
+          <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-secondary">
+            {selectedMood.description}
           </p>
         </div>
-        <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-secondary">
-          {selectedMood.description}
-        </p>
-      </div>
 
-      <form className="mt-7" noValidate onSubmit={submitMoment}>
-        <label
-          htmlFor="moment-note"
-          className="block text-sm font-medium text-primary"
-        >
-          What is one moment that made you feel this way?
-        </label>
-        <div className="relative mt-3">
-          <textarea
-            ref={textareaRef}
-            id="moment-note"
-            name="moment"
-            value={momentText}
-            maxLength={120}
-            rows={3}
-            aria-describedby="moment-count moment-feedback"
-            aria-invalid={feedback?.kind === "error"}
-            className="min-h-28 w-full resize-none rounded-sm border border-white/10 bg-background/55 px-4 py-3.5 pr-16 text-[0.925rem] leading-6 text-primary outline-none transition placeholder:text-secondary/85 hover:border-white/20 focus:border-rose/65 focus:ring-2 focus:ring-rose/15"
-            placeholder="A small kindness, a familiar song, rain on the glass…"
-            onChange={(event) => {
-              setMomentText(event.target.value);
-              if (feedback) {
-                setFeedback(null);
-              }
-            }}
-          />
-          <span
-            id="moment-count"
-            className="pointer-events-none absolute bottom-3 right-3 text-[0.68rem] tabular-nums text-secondary/85"
+        <div className="mt-7 grid gap-4 sm:grid-cols-[minmax(0,1.15fr)_minmax(10rem,0.85fr)]">
+          <div>
+            <label
+              htmlFor="moment-title"
+              className="block text-sm font-medium text-primary"
+            >
+              Moment title
+            </label>
+            <input
+              ref={titleRef}
+              id="moment-title"
+              name="title"
+              type="text"
+              required
+              value={title}
+              maxLength={80}
+              aria-describedby={errors.title ? "moment-title-error" : undefined}
+              aria-invalid={Boolean(errors.title)}
+              className={`${fieldClassName} mt-2`}
+              placeholder="A name for this memory"
+              onChange={(event) => {
+                setTitle(event.target.value);
+                clearFieldError("title");
+              }}
+            />
+            <p
+              id="moment-title-error"
+              role={errors.title ? "alert" : undefined}
+              className="mt-1.5 min-h-5 text-xs text-rose-soft"
+            >
+              {errors.title}
+            </p>
+          </div>
+
+          <div>
+            <label
+              htmlFor="moment-date"
+              className="block text-sm font-medium text-primary"
+            >
+              Moment date
+            </label>
+            <input
+              ref={dateRef}
+              id="moment-date"
+              name="date"
+              type="date"
+              required
+              value={date}
+              aria-describedby={errors.date ? "moment-date-error" : undefined}
+              aria-invalid={Boolean(errors.date)}
+              className={`${fieldClassName} mt-2 min-h-12`}
+              onChange={(event) => {
+                setDate(event.target.value);
+                clearFieldError("date");
+              }}
+            />
+            <p
+              id="moment-date-error"
+              role={errors.date ? "alert" : undefined}
+              className="mt-1.5 min-h-5 text-xs text-rose-soft"
+            >
+              {errors.date}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-1">
+          <label
+            htmlFor="moment-description"
+            className="block text-sm font-medium text-primary"
           >
-            {momentText.length} / 120
-          </span>
+            Moment description
+          </label>
+          <div className="relative mt-2">
+            <textarea
+              ref={descriptionRef}
+              id="moment-description"
+              name="description"
+              required
+              value={description}
+              maxLength={280}
+              rows={3}
+              aria-describedby={`moment-description-count${errors.description ? " moment-description-error" : ""}`}
+              aria-invalid={Boolean(errors.description)}
+              className={`${fieldClassName} min-h-28 resize-none pr-20`}
+              placeholder="What happened, and how did it feel?"
+              onChange={(event) => {
+                setDescription(event.target.value);
+                clearFieldError("description");
+              }}
+            />
+            <span
+              id="moment-description-count"
+              className="pointer-events-none absolute bottom-3 right-3 text-[0.68rem] tabular-nums text-secondary/85"
+            >
+              {description.length} / 280
+            </span>
+          </div>
+          <p
+            id="moment-description-error"
+            role={errors.description ? "alert" : undefined}
+            className="mt-1.5 min-h-5 text-xs text-rose-soft"
+          >
+            {errors.description}
+          </p>
+        </div>
+
+        <div className="mt-1">
+          <label
+            htmlFor="moment-image"
+            className="block text-sm font-medium text-primary"
+          >
+            Add an image (optional)
+          </label>
+          <input
+            ref={imageRef}
+            id="moment-image"
+            name="image"
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            aria-describedby={`moment-image-help${errors.image ? " moment-image-error" : ""}`}
+            aria-invalid={Boolean(errors.image)}
+            className="mt-2 block min-h-12 w-full cursor-pointer rounded-sm border border-white/10 bg-background/55 text-sm text-secondary file:mr-4 file:min-h-12 file:border-0 file:border-r file:border-white/10 file:bg-white/[0.04] file:px-4 file:text-sm file:font-medium file:text-primary hover:border-white/20"
+            onChange={selectImage}
+          />
+          <div className="mt-1.5 flex min-h-5 flex-wrap items-center justify-between gap-2 text-xs">
+            <p id="moment-image-help" className="text-secondary/85">
+              JPEG, PNG, or WebP · 1 MB maximum
+            </p>
+            {image ? (
+              <button
+                type="button"
+                disabled={isSubmitting}
+                className="inline-flex min-h-11 items-center rounded-sm px-2 font-medium text-champagne transition-colors hover:text-primary focus-visible:outline-none disabled:cursor-wait disabled:opacity-65"
+                onClick={removeImage}
+              >
+                Remove image
+              </button>
+            ) : null}
+            <p
+              id="moment-image-error"
+              role={errors.image ? "alert" : undefined}
+              className="text-rose-soft"
+            >
+              {errors.image}
+            </p>
+          </div>
         </div>
 
         <div className="mt-3 min-h-6 text-center">
           <p
             id="moment-feedback"
-            role={feedback?.kind === "error" ? "alert" : "status"}
-            className={`text-sm ${
-              feedback?.kind === "error" ? "text-rose-soft" : "text-champagne"
-            }`}
+            role={statusFeedback.kind === "error" ? "alert" : "status"}
+            className={`text-sm ${statusFeedback.kind === "error" ? "text-rose-soft" : "text-champagne"}`}
           >
-            {feedback?.message ?? "This moment stays in your current preview."}
+            {statusFeedback.message}
           </p>
         </div>
 
         <button
           type="submit"
-          className="button-primary mx-auto mt-4 flex min-h-12 w-full items-center justify-center px-7 text-sm font-medium sm:w-auto"
+          disabled={isHydrating || isSubmitting}
+          className="button-primary mx-auto mt-4 flex min-h-12 w-full items-center justify-center px-7 text-sm font-medium disabled:cursor-wait disabled:opacity-65 sm:w-auto"
         >
-          Create a Moment
+          {isSubmitting ? "Saving Moment…" : "Create a Moment"}
         </button>
       </form>
     </section>
