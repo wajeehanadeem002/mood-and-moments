@@ -13,6 +13,13 @@
 
 # testing
 /coverage
+/docs/superpowers/qa/**/iteration-1/
+/docs/superpowers/qa/**/iteration-2/
+/docs/superpowers/qa/**/iteration-3/
+/docs/superpowers/qa/**/iteration-4/
+/docs/superpowers/qa/**/final-artifacts/
+/docs/superpowers/qa/**/playwright-artifacts/
+/docs/superpowers/qa/**/iteration-5/desktop-accessibility.png
 
 # next.js
 /.next/

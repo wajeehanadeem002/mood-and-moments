@@ -1,0 +1,224 @@
+[
+  {
+    "name": "desktop-full",
+    "metrics": {
+      "viewport": {
+        "width": 971,
+        "height": 900
+      },
+      "scrollWidth": 971,
+      "scrollHeight": 3770,
+      "horizontalOverflow": false,
+      "undersizedControls": [],
+      "images": [
+        {
+          "alt": "",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fatmosphere%2Fbotanical-dusk.png&w=1080&q=75",
+          "naturalWidth": 970,
+          "renderedWidth": 971,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "A warm cup of coffee beside dried flowers in soft morning window light.",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fmoments%2Fslow-sunday-light.png&w=640&q=75",
+          "naturalWidth": 453,
+          "renderedWidth": 453,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "A vintage black telephone beside a notebook in warm evening light.",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fmoments%2Fcall-worth-remembering.png&w=640&q=75",
+          "naturalWidth": 453,
+          "renderedWidth": 453,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "Rain on a dark window with a candle and mug glowing nearby.",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fmoments%2Frain-against-window.png&w=640&q=75",
+          "naturalWidth": 453,
+          "renderedWidth": 453,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fatmosphere%2Fbotanical-dusk.png&w=1080&q=75",
+          "naturalWidth": 970,
+          "renderedWidth": 971,
+          "objectFit": "cover"
+        }
+      ]
+    },
+    "consoleErrors": [],
+    "pageErrors": []
+  },
+  {
+    "name": "tablet-full",
+    "metrics": {
+      "viewport": {
+        "width": 768,
+        "height": 1024
+      },
+      "scrollWidth": 768,
+      "scrollHeight": 5496,
+      "horizontalOverflow": false,
+      "undersizedControls": [],
+      "images": [
+        {
+          "alt": "",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fatmosphere%2Fbotanical-dusk.png&w=828&q=75",
+          "naturalWidth": 768,
+          "renderedWidth": 768,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "A warm cup of coffee beside dried flowers in soft morning window light.",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fmoments%2Fslow-sunday-light.png&w=750&q=75",
+          "naturalWidth": 704,
+          "renderedWidth": 702,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "A vintage black telephone beside a notebook in warm evening light.",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fmoments%2Fcall-worth-remembering.png&w=750&q=75",
+          "naturalWidth": 704,
+          "renderedWidth": 702,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "Rain on a dark window with a candle and mug glowing nearby.",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fmoments%2Frain-against-window.png&w=750&q=75",
+          "naturalWidth": 704,
+          "renderedWidth": 702,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fatmosphere%2Fbotanical-dusk.png&w=828&q=75",
+          "naturalWidth": 768,
+          "renderedWidth": 768,
+          "objectFit": "cover"
+        }
+      ]
+    },
+    "consoleErrors": [],
+    "pageErrors": []
+  },
+  {
+    "name": "mobile-full",
+    "metrics": {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "scrollWidth": 390,
+      "scrollHeight": 5776,
+      "horizontalOverflow": false,
+      "undersizedControls": [],
+      "images": [
+        {
+          "alt": "",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fatmosphere%2Fbotanical-dusk.png&w=640&q=75",
+          "naturalWidth": 390,
+          "renderedWidth": 390,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "A warm cup of coffee beside dried flowers in soft morning window light.",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fmoments%2Fslow-sunday-light.png&w=384&q=75",
+          "naturalWidth": 350,
+          "renderedWidth": 348,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "A vintage black telephone beside a notebook in warm evening light.",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fmoments%2Fcall-worth-remembering.png&w=384&q=75",
+          "naturalWidth": 350,
+          "renderedWidth": 348,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "Rain on a dark window with a candle and mug glowing nearby.",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fmoments%2Frain-against-window.png&w=384&q=75",
+          "naturalWidth": 350,
+          "renderedWidth": 348,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fatmosphere%2Fbotanical-dusk.png&w=640&q=75",
+          "naturalWidth": 390,
+          "renderedWidth": 390,
+          "objectFit": "cover"
+        }
+      ]
+    },
+    "consoleErrors": [],
+    "pageErrors": []
+  },
+  {
+    "name": "small-mobile-full",
+    "metrics": {
+      "viewport": {
+        "width": 320,
+        "height": 720
+      },
+      "scrollWidth": 320,
+      "scrollHeight": 6025,
+      "horizontalOverflow": false,
+      "undersizedControls": [],
+      "images": [
+        {
+          "alt": "",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fatmosphere%2Fbotanical-dusk.png&w=640&q=75",
+          "naturalWidth": 320,
+          "renderedWidth": 320,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "A warm cup of coffee beside dried flowers in soft morning window light.",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fmoments%2Fslow-sunday-light.png&w=384&q=75",
+          "naturalWidth": 280,
+          "renderedWidth": 278,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "A vintage black telephone beside a notebook in warm evening light.",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fmoments%2Fcall-worth-remembering.png&w=384&q=75",
+          "naturalWidth": 280,
+          "renderedWidth": 278,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "Rain on a dark window with a candle and mug glowing nearby.",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fmoments%2Frain-against-window.png&w=384&q=75",
+          "naturalWidth": 280,
+          "renderedWidth": 278,
+          "objectFit": "cover"
+        },
+        {
+          "alt": "",
+          "currentSrc": "http://127.0.0.1:3001/_next/image?url=%2Fimages%2Fatmosphere%2Fbotanical-dusk.png&w=640&q=75",
+          "naturalWidth": 320,
+          "renderedWidth": 320,
+          "objectFit": "cover"
+        }
+      ]
+    },
+    "consoleErrors": [],
+    "pageErrors": []
+  },
+  {
+    "name": "desktop-accessibility",
+    "accessibleSubmitName": "Create a Moment",
+    "groupName": "Choose a mood",
+    "consoleErrors": [],
+    "pageErrors": []
+  },
+  {
+    "name": "reduced-motion",
+    "motion": {
+      "animationDuration": "1e-05s",
+      "scrollBehavior": "auto"
+    }
+  }
+]
