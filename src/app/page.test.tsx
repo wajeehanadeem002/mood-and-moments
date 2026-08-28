@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -7,6 +8,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { recentMoments } from "@/data/moments";
 import { MOMENTS_STORAGE_KEY } from "@/repositories/local-storage-moment-repository";
 
 import Home from "./page";
@@ -26,6 +28,16 @@ function fillMomentForm() {
   fireEvent.click(within(form).getByRole("button", { name: "Calm" }));
 
   return form;
+}
+
+function getSectionByHeading(name: string): HTMLElement {
+  const section = screen.getByRole("heading", { name }).closest("section");
+
+  if (!section) {
+    throw new Error(`Could not find the ${name} section.`);
+  }
+
+  return section;
 }
 
 describe("Mood & Moments homepage", () => {
@@ -219,5 +231,291 @@ describe("Mood & Moments homepage", () => {
       ),
     ).not.toBeNull();
     expect(screen.getAllByRole("article")).toHaveLength(3);
+  });
+
+  it("keeps every static example Moment read-only", async () => {
+    render(<Home />);
+
+    await screen.findByText("Your moments are saved in this browser.");
+
+    expect(screen.queryByRole("button", { name: /^Edit / })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Delete / })).toBeNull();
+  });
+
+  it("does not duplicate or unlock a static example with a colliding stored id", async () => {
+    window.localStorage.setItem(
+      MOMENTS_STORAGE_KEY,
+      JSON.stringify([
+        {
+          ...recentMoments[0],
+          title: "A stored collision",
+          image: undefined,
+        },
+      ]),
+    );
+
+    render(<Home />);
+
+    await screen.findByText("Your moments are saved in this browser.");
+    expect(screen.queryByText("A stored collision")).toBeNull();
+    expect(screen.getAllByText("Slow Sunday light")).toHaveLength(2);
+    expect(
+      screen.queryByRole("button", { name: "Edit Slow Sunday light" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Delete Slow Sunday light" }),
+    ).toBeNull();
+  });
+
+  it("edits a user-created Moment in both views and persists it after refresh", async () => {
+    const firstRender = render(<Home />);
+    await screen.findByText("Your moments are saved in this browser.");
+    const createForm = fillMomentForm();
+    fireEvent.click(
+      within(createForm).getByRole("button", { name: "Create a Moment" }),
+    );
+    await screen.findByText("Your moment has been saved.");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit First rain of the season" }),
+    );
+    const firstEditForm = screen.getByRole("form", { name: "Edit Moment" });
+    expect(
+      (within(firstEditForm).getByLabelText("Moment title") as HTMLInputElement)
+        .value,
+    ).toBe("First rain of the season");
+
+    fireEvent.click(
+      within(firstEditForm).getByRole("button", { name: "Cancel editing" }),
+    );
+    expect(screen.getByRole("form", { name: "Create a Moment" })).not.toBeNull();
+    expect(screen.getAllByText("First rain of the season")).toHaveLength(2);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit First rain of the season" }),
+    );
+    const editForm = screen.getByRole("form", { name: "Edit Moment" });
+    fireEvent.change(within(editForm).getByLabelText("Moment title"), {
+      target: { value: "Rain, remembered differently" },
+    });
+    fireEvent.change(within(editForm).getByLabelText("Moment description"), {
+      target: { value: "I noticed how peaceful the room became." },
+    });
+    fireEvent.change(within(editForm).getByLabelText("Moment date"), {
+      target: { value: "2026-08-25" },
+    });
+    fireEvent.click(within(editForm).getByRole("button", { name: "Loved" }));
+    fireEvent.click(
+      within(editForm).getByRole("button", { name: "Save Changes" }),
+    );
+
+    expect(
+      await within(editForm).findByText("Your moment has been updated."),
+    ).not.toBeNull();
+    expect(screen.queryByText("First rain of the season")).toBeNull();
+    expect(
+      within(getSectionByHeading("Recent Moments")).getByText(
+        "Rain, remembered differently",
+      ),
+    ).not.toBeNull();
+    expect(
+      within(getSectionByHeading("Memory Timeline")).getByText(
+        "Rain, remembered differently",
+      ),
+    ).not.toBeNull();
+    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).toContain(
+      "Rain, remembered differently",
+    );
+    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).not.toContain(
+      "First rain of the season",
+    );
+    expect(screen.getAllByText("Slow Sunday light")).toHaveLength(2);
+
+    firstRender.unmount();
+    render(<Home />);
+
+    await screen.findByText("Your moments are saved in this browser.");
+    expect(
+      within(getSectionByHeading("Recent Moments")).getByText(
+        "Rain, remembered differently",
+      ),
+    ).not.toBeNull();
+    expect(
+      within(getSectionByHeading("Memory Timeline")).getByText(
+        "Rain, remembered differently",
+      ),
+    ).not.toBeNull();
+    expect(
+      within(getSectionByHeading("Recent Moments")).queryByText(
+        "First rain of the season",
+      ),
+    ).toBeNull();
+    expect(
+      within(getSectionByHeading("Memory Timeline")).queryByText(
+        "First rain of the season",
+      ),
+    ).toBeNull();
+  });
+
+  it("deletes a user-created Moment from both views and keeps it deleted after refresh", async () => {
+    const firstRender = render(<Home />);
+    await screen.findByText("Your moments are saved in this browser.");
+    const form = fillMomentForm();
+    fireEvent.click(
+      within(form).getByRole("button", { name: "Create a Moment" }),
+    );
+    await screen.findByText("Your moment has been saved.");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete First rain of the season" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    expect(await screen.findByText("Moment deleted.")).not.toBeNull();
+    expect(
+      within(getSectionByHeading("Recent Moments")).queryByText(
+        "First rain of the season",
+      ),
+    ).toBeNull();
+    expect(
+      within(getSectionByHeading("Memory Timeline")).queryByText(
+        "First rain of the season",
+      ),
+    ).toBeNull();
+    expect(screen.getAllByRole("article")).toHaveLength(3);
+    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).not.toContain(
+      "First rain of the season",
+    );
+    expect(screen.getAllByText("Slow Sunday light")).toHaveLength(2);
+
+    firstRender.unmount();
+    render(<Home />);
+
+    await screen.findByText("Your moments are saved in this browser.");
+    expect(screen.queryByText("First rain of the season")).toBeNull();
+    expect(screen.getAllByRole("article")).toHaveLength(3);
+  });
+
+  it("keeps the previous Moment visible when an edit cannot be persisted", async () => {
+    render(<Home />);
+    await screen.findByText("Your moments are saved in this browser.");
+    const createForm = fillMomentForm();
+    fireEvent.click(
+      within(createForm).getByRole("button", { name: "Create a Moment" }),
+    );
+    await screen.findByText("Your moment has been saved.");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit First rain of the season" }),
+    );
+    const editForm = screen.getByRole("form", { name: "Edit Moment" });
+    fireEvent.change(within(editForm).getByLabelText("Moment title"), {
+      target: { value: "An edit that cannot be saved" },
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+    });
+
+    fireEvent.click(
+      within(editForm).getByRole("button", { name: "Save Changes" }),
+    );
+
+    expect(
+      await within(editForm).findByText(
+        "We couldn’t update this moment. Check browser storage and try again.",
+      ),
+    ).not.toBeNull();
+    expect(screen.getAllByText("First rain of the season")).toHaveLength(2);
+    expect(screen.queryByText("An edit that cannot be saved")).toBeNull();
+    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).toContain(
+      "First rain of the season",
+    );
+  });
+
+  it("locks form and card mutations while an image edit is being persisted", async () => {
+    render(<Home />);
+    await screen.findByText("Your moments are saved in this browser.");
+    const createForm = fillMomentForm();
+    fireEvent.click(
+      within(createForm).getByRole("button", { name: "Create a Moment" }),
+    );
+    await screen.findByText("Your moment has been saved.");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit First rain of the season" }),
+    );
+    const editForm = screen.getByRole("form", { name: "Edit Moment" });
+    fireEvent.change(within(editForm).getByLabelText("Add an image (optional)"), {
+      target: {
+        files: [new File(["image"], "rain.png", { type: "image/png" })],
+      },
+    });
+    let finishImageRead: (() => void) | undefined;
+    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(
+      function mockImageRead(this: FileReader) {
+        finishImageRead = () => {
+          Object.defineProperty(this, "result", {
+            configurable: true,
+            value: "data:image/png;base64,aW1hZ2U=",
+          });
+          this.dispatchEvent(new ProgressEvent("load"));
+        };
+      },
+    );
+
+    fireEvent.click(
+      within(editForm).getByRole("button", { name: "Save Changes" }),
+    );
+
+    expect(editForm.getAttribute("aria-busy")).toBe("true");
+    expect(
+      within(editForm).getByLabelText("Moment title").matches(":disabled"),
+    ).toBe(true);
+    const deleteButton = screen.getByRole("button", {
+      name: "Delete First rain of the season",
+    });
+    expect(deleteButton.matches(":disabled")).toBe(true);
+    fireEvent.click(deleteButton);
+    expect(screen.queryByRole("button", { name: "Confirm delete" })).toBeNull();
+
+    await act(async () => {
+      finishImageRead?.();
+      await Promise.resolve();
+    });
+
+    expect(
+      await within(editForm).findByText("Your moment has been updated."),
+    ).not.toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Delete First rain of the season" })
+        .matches(":disabled"),
+    ).toBe(false);
+  });
+
+  it("keeps a Moment visible when deletion cannot be persisted", async () => {
+    render(<Home />);
+    await screen.findByText("Your moments are saved in this browser.");
+    const form = fillMomentForm();
+    fireEvent.click(
+      within(form).getByRole("button", { name: "Create a Moment" }),
+    );
+    await screen.findByText("Your moment has been saved.");
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete First rain of the season" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    expect(
+      await screen.findByText(
+        "We couldn’t delete this moment. Check browser storage and try again.",
+      ),
+    ).not.toBeNull();
+    expect(screen.getAllByText("First rain of the season")).toHaveLength(2);
+    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).toContain(
+      "First rain of the season",
+    );
   });
 });

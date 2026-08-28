@@ -4,6 +4,7 @@ import { LocalStorageMomentRepository } from "@/repositories/local-storage-momen
 import type { MomentDraft } from "./moment-creation";
 import {
   createMoment,
+  updateMoment,
   validateMomentDraft,
   validateMomentImage,
 } from "./moment-creation";
@@ -122,5 +123,135 @@ describe("createMoment", () => {
       createMoment(repository, createDraft({ title: "  " })),
     ).rejects.toThrow("Moment draft is invalid.");
     expect(await repository.list()).toEqual([]);
+  });
+});
+
+describe("updateMoment", () => {
+  beforeEach(() => window.localStorage.clear());
+
+  it("updates editable fields while preserving Moment identity and time", async () => {
+    const repository = new LocalStorageMomentRepository(window.localStorage);
+    const existingMoment = {
+      id: "created-moment",
+      date: "Aug 28, 2026",
+      dateTime: "2026-08-28T09:15:00",
+      time: "9:15 AM",
+      mood: "calm" as const,
+      title: "A quiet morning",
+      excerpt: "Sunlight moved slowly across the room.",
+      image: {
+        src: "data:image/png;base64,aW1hZ2U=",
+        alt: "A quiet morning moment image.",
+      },
+    };
+    await repository.create(existingMoment);
+    const updatedMoment = await updateMoment(
+      repository,
+      existingMoment,
+      createDraft({
+        title: "  An evening remembered  ",
+        description: "  We watched the sky soften together.  ",
+        mood: "loved",
+        date: "2026-08-20",
+      }),
+    );
+
+    expect(updatedMoment).toEqual({
+      id: "created-moment",
+      date: "Aug 20, 2026",
+      dateTime: "2026-08-20T09:15:00",
+      time: "9:15 AM",
+      mood: "loved",
+      title: "An evening remembered",
+      excerpt: "We watched the sky soften together.",
+      image: {
+        src: "data:image/png;base64,aW1hZ2U=",
+        alt: "An evening remembered moment image.",
+      },
+    });
+    expect(await repository.list()).toEqual([updatedMoment]);
+  });
+
+  it("removes an existing image when the edit explicitly clears it", async () => {
+    const repository = new LocalStorageMomentRepository(window.localStorage);
+    const existingMoment = {
+      id: "created-moment",
+      date: "Aug 28, 2026",
+      dateTime: "2026-08-28T09:15:00",
+      time: "9:15 AM",
+      mood: "calm" as const,
+      title: "A quiet morning",
+      excerpt: "Sunlight moved slowly across the room.",
+      image: {
+        src: "data:image/png;base64,aW1hZ2U=",
+        alt: "A quiet morning moment image.",
+      },
+    };
+    await repository.create(existingMoment);
+
+    const updatedMoment = await updateMoment(
+      repository,
+      existingMoment,
+      createDraft(),
+      { removeImage: true },
+    );
+
+    expect(updatedMoment.image).toBeUndefined();
+    expect(await repository.list()).toEqual([updatedMoment]);
+  });
+
+  it("replaces the optional image during an edit", async () => {
+    const repository = new LocalStorageMomentRepository(window.localStorage);
+    const existingMoment = {
+      id: "created-moment",
+      date: "Aug 28, 2026",
+      dateTime: "2026-08-28T09:15:00",
+      time: "9:15 AM",
+      mood: "calm" as const,
+      title: "A quiet morning",
+      excerpt: "Sunlight moved slowly across the room.",
+    };
+    const replacementImage = new File(["new image"], "evening.webp", {
+      type: "image/webp",
+    });
+    await repository.create(existingMoment);
+
+    const updatedMoment = await updateMoment(
+      repository,
+      existingMoment,
+      createDraft({
+        title: "An evening remembered",
+        image: replacementImage,
+      }),
+    );
+
+    expect(updatedMoment.image).toEqual({
+      src: expect.stringMatching(/^data:image\/webp;base64,/),
+      alt: "An evening remembered moment image.",
+    });
+    expect(await repository.list()).toEqual([updatedMoment]);
+  });
+
+  it("does not persist an invalid edit that bypasses form validation", async () => {
+    const repository = new LocalStorageMomentRepository(window.localStorage);
+    const existingMoment = {
+      id: "created-moment",
+      date: "Aug 28, 2026",
+      dateTime: "2026-08-28T09:15:00",
+      time: "9:15 AM",
+      mood: "calm" as const,
+      title: "A quiet morning",
+      excerpt: "Sunlight moved slowly across the room.",
+    };
+    await repository.create(existingMoment);
+
+    await expect(
+      updateMoment(
+        repository,
+        existingMoment,
+        createDraft({ title: "  " }),
+      ),
+    ).rejects.toThrow("Moment draft is invalid.");
+    expect(await repository.list()).toEqual([existingMoment]);
   });
 });

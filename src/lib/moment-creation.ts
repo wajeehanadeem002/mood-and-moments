@@ -96,6 +96,10 @@ type CreateMomentOptions = {
   now?: Date;
 };
 
+export type UpdateMomentOptions = {
+  removeImage?: boolean;
+};
+
 export async function createMoment(
   repository: MomentRepository,
   draft: MomentDraft,
@@ -132,4 +136,42 @@ export async function createMoment(
   };
 
   return repository.create(moment);
+}
+
+export async function updateMoment(
+  repository: MomentRepository,
+  existingMoment: Moment,
+  draft: MomentDraft,
+  options: UpdateMomentOptions = {},
+): Promise<Moment> {
+  if (Object.keys(validateMomentDraft(draft)).length > 0) {
+    throw new Error("Moment draft is invalid.");
+  }
+
+  const title = draft.title.trim();
+  const replacementImageSource = draft.image
+    ? await fileToDataUrl(draft.image)
+    : null;
+  const imageSource =
+    replacementImageSource ??
+    (options.removeImage ? undefined : existingMoment.image?.src);
+  const moment: Moment = {
+    id: existingMoment.id,
+    date: formatDate(draft.date),
+    dateTime: `${draft.date}${existingMoment.dateTime.slice(10)}`,
+    time: existingMoment.time,
+    mood: draft.mood,
+    title,
+    excerpt: draft.description.trim(),
+    ...(imageSource
+      ? {
+          image: {
+            src: imageSource,
+            alt: `${title} moment image.`,
+          },
+        }
+      : {}),
+  };
+
+  return repository.update(moment);
 }

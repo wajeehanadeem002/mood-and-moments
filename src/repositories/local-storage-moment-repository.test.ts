@@ -44,6 +44,60 @@ describe("LocalStorageMomentRepository", () => {
     expect(await repository.list()).toEqual([laterMoment, savedMoment]);
   });
 
+  it("updates one stored Moment without changing the others", async () => {
+    const repository = new LocalStorageMomentRepository(window.localStorage);
+    const otherMoment: Moment = {
+      ...savedMoment,
+      id: "moment-2",
+      title: "Another memory",
+    };
+    const updatedMoment: Moment = {
+      ...savedMoment,
+      mood: "loved",
+      title: "A newly remembered beginning",
+    };
+    await repository.create(savedMoment);
+    await repository.create(otherMoment);
+
+    const result = await repository.update(updatedMoment);
+
+    expect(result).toEqual(updatedMoment);
+    expect(await repository.list()).toEqual([otherMoment, updatedMoment]);
+  });
+
+  it("rejects an update for a Moment that is not stored", async () => {
+    const repository = new LocalStorageMomentRepository(window.localStorage);
+
+    await expect(repository.update(savedMoment)).rejects.toThrow(
+      "Moment not found.",
+    );
+    expect(await repository.list()).toEqual([]);
+  });
+
+  it("deletes one stored Moment without changing the others", async () => {
+    const repository = new LocalStorageMomentRepository(window.localStorage);
+    const otherMoment: Moment = {
+      ...savedMoment,
+      id: "moment-2",
+      title: "Another memory",
+    };
+    await repository.create(savedMoment);
+    await repository.create(otherMoment);
+
+    await repository.delete(savedMoment.id);
+
+    expect(await repository.list()).toEqual([otherMoment]);
+  });
+
+  it("rejects a delete for a Moment that is not stored", async () => {
+    const repository = new LocalStorageMomentRepository(window.localStorage);
+
+    await expect(repository.delete(savedMoment.id)).rejects.toThrow(
+      "Moment not found.",
+    );
+    expect(await repository.list()).toEqual([]);
+  });
+
   it("recovers from malformed JSON without exposing a load failure", async () => {
     window.localStorage.setItem(MOMENTS_STORAGE_KEY, "{not-json");
     const repository = new LocalStorageMomentRepository(window.localStorage);
@@ -56,6 +110,20 @@ describe("LocalStorageMomentRepository", () => {
     window.localStorage.setItem(
       MOMENTS_STORAGE_KEY,
       JSON.stringify([{ title: "Missing required fields" }]),
+    );
+    const repository = new LocalStorageMomentRepository(window.localStorage);
+
+    expect(await repository.list()).toEqual([]);
+    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).toBeNull();
+  });
+
+  it("treats duplicate stored Moment identifiers as corrupted data", async () => {
+    window.localStorage.setItem(
+      MOMENTS_STORAGE_KEY,
+      JSON.stringify([
+        savedMoment,
+        { ...savedMoment, title: "A duplicate identifier" },
+      ]),
     );
     const repository = new LocalStorageMomentRepository(window.localStorage);
 

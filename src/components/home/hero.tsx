@@ -1,18 +1,33 @@
 import Image from "next/image";
 
 import { MoodRitual } from "@/components/home/mood-ritual";
-import type { MomentDraft } from "@/lib/moment-creation";
+import type { Moment } from "@/data/moments";
+import type {
+  MomentDraft,
+  UpdateMomentOptions,
+} from "@/lib/moment-creation";
 
 type HeroProps = {
   isHydrating: boolean;
   loadError: boolean;
+  isMutationPending?: boolean;
+  editingMoment?: Moment | null;
   onCreateMoment: (draft: MomentDraft) => Promise<void>;
+  onUpdateMoment?: (
+    draft: MomentDraft,
+    options: UpdateMomentOptions,
+  ) => Promise<void>;
+  onCancelEdit?: () => void;
 };
 
 export function Hero({
   isHydrating,
   loadError,
+  isMutationPending = false,
+  editingMoment = null,
   onCreateMoment,
+  onUpdateMoment,
+  onCancelEdit,
 }: HeroProps) {
   return (
     <section
@@ -65,9 +80,14 @@ export function Hero({
         </div>
 
         <MoodRitual
+          key={editingMoment?.id ?? "create"}
           isHydrating={isHydrating}
           loadError={loadError}
+          isMutationPending={isMutationPending}
+          editingMoment={editingMoment}
           onCreateMoment={onCreateMoment}
+          onUpdateMoment={onUpdateMoment}
+          onCancelEdit={onCancelEdit}
         />
       </div>
     </section>

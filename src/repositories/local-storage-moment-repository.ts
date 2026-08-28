@@ -63,7 +63,12 @@ export class LocalStorageMomentRepository implements MomentRepository {
     try {
       const parsedValue: unknown = JSON.parse(storedValue);
 
-      if (!Array.isArray(parsedValue) || !parsedValue.every(isStoredMoment)) {
+      if (
+        !Array.isArray(parsedValue) ||
+        !parsedValue.every(isStoredMoment) ||
+        new Set(parsedValue.map((moment) => moment.id)).size !==
+          parsedValue.length
+      ) {
         throw new Error("Stored Moments do not match the expected schema.");
       }
 
@@ -91,5 +96,33 @@ export class LocalStorageMomentRepository implements MomentRepository {
     );
 
     return moment;
+  }
+
+  async update(moment: Moment): Promise<Moment> {
+    const storedMoments = this.readStoredMoments();
+    const momentIndex = storedMoments.findIndex(
+      (storedMoment) => storedMoment.id === moment.id,
+    );
+
+    if (momentIndex === -1) {
+      throw new Error("Moment not found.");
+    }
+
+    const updatedMoments = [...storedMoments];
+    updatedMoments[momentIndex] = moment;
+    this.storage.setItem(MOMENTS_STORAGE_KEY, JSON.stringify(updatedMoments));
+
+    return moment;
+  }
+
+  async delete(id: string): Promise<void> {
+    const storedMoments = this.readStoredMoments();
+    const updatedMoments = storedMoments.filter((moment) => moment.id !== id);
+
+    if (updatedMoments.length === storedMoments.length) {
+      throw new Error("Moment not found.");
+    }
+
+    this.storage.setItem(MOMENTS_STORAGE_KEY, JSON.stringify(updatedMoments));
   }
 }

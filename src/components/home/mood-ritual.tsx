@@ -3,10 +3,11 @@
 import { ChangeEvent, FormEvent, useRef, useState } from "react";
 
 import { MoodIcon } from "@/components/ui/mood-icon";
-import { moods, type MoodId } from "@/data/moments";
+import { moods, type Moment, type MoodId } from "@/data/moments";
 import {
   type MomentDraft,
   type MomentFieldErrors,
+  type UpdateMomentOptions,
   validateMomentDraft,
   validateMomentImage,
 } from "@/lib/moment-creation";
@@ -19,7 +20,14 @@ type Feedback = {
 type MoodRitualProps = {
   isHydrating: boolean;
   loadError: boolean;
+  isMutationPending?: boolean;
+  editingMoment?: Moment | null;
   onCreateMoment: (draft: MomentDraft) => Promise<void>;
+  onUpdateMoment?: (
+    draft: MomentDraft,
+    options: UpdateMomentOptions,
+  ) => Promise<void>;
+  onCancelEdit?: () => void;
 };
 
 const accentText: Record<(typeof moods)[number]["accent"], string> = {
@@ -34,13 +42,24 @@ const fieldClassName =
 export function MoodRitual({
   isHydrating,
   loadError,
+  isMutationPending = false,
+  editingMoment = null,
   onCreateMoment,
+  onUpdateMoment,
+  onCancelEdit,
 }: MoodRitualProps) {
-  const [selectedMoodId, setSelectedMoodId] = useState<MoodId>("happy");
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [date, setDate] = useState("");
+  const [selectedMoodId, setSelectedMoodId] = useState<MoodId>(
+    editingMoment?.mood ?? "happy",
+  );
+  const [title, setTitle] = useState(editingMoment?.title ?? "");
+  const [description, setDescription] = useState(
+    editingMoment?.excerpt ?? "",
+  );
+  const [date, setDate] = useState(
+    editingMoment?.dateTime.slice(0, 10) ?? "",
+  );
   const [image, setImage] = useState<File | null>(null);
+  const [removeExistingImage, setRemoveExistingImage] = useState(false);
   const [errors, setErrors] = useState<MomentFieldErrors>({});
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -51,6 +70,7 @@ export function MoodRitual({
   const imageRef = useRef<HTMLInputElement>(null);
   const selectedMood =
     moods.find((mood) => mood.id === selectedMoodId) ?? moods[0];
+  const isEditMode = Boolean(editingMoment);
 
   function clearFieldError(field: keyof MomentFieldErrors) {
     setErrors((current) => {
@@ -73,6 +93,7 @@ export function MoodRitual({
       : null;
 
     setImage(selectedImage);
+    setRemoveExistingImage(false);
     setErrors((current) => {
       const next = { ...current };
       delete next.image;
@@ -87,7 +108,11 @@ export function MoodRitual({
   }
 
   function removeImage() {
+    const isRemovingReplacement = Boolean(image);
     setImage(null);
+    setRemoveExistingImage(
+      !isRemovingReplacement && Boolean(editingMoment?.image),
+    );
     clearFieldError("image");
 
     if (imageRef.current) {
@@ -133,21 +158,34 @@ export function MoodRitual({
     setFeedback(null);
 
     try {
-      await onCreateMoment(draft);
-      setTitle("");
-      setDescription("");
-      setDate("");
-      setImage(null);
-      setErrors({});
-      if (imageRef.current) {
-        imageRef.current.value = "";
+      if (isEditMode) {
+        if (!onUpdateMoment) {
+          throw new Error("Moment update is not available.");
+        }
+
+        await onUpdateMoment(draft, { removeImage: removeExistingImage });
+        setFeedback({
+          kind: "success",
+          message: "Your moment has been updated.",
+        });
+      } else {
+        await onCreateMoment(draft);
+        setTitle("");
+        setDescription("");
+        setDate("");
+        setImage(null);
+        setErrors({});
+        if (imageRef.current) {
+          imageRef.current.value = "";
+        }
+        setFeedback({ kind: "success", message: "Your moment has been saved." });
       }
-      setFeedback({ kind: "success", message: "Your moment has been saved." });
     } catch {
       setFeedback({
         kind: "error",
-        message:
-          "We couldn’t save this moment. Check browser storage and try again.",
+        message: isEditMode
+          ? "We couldn’t update this moment. Check browser storage and try again."
+          : "We couldn’t save this moment. Check browser storage and try again.",
       });
     } finally {
       submissionInProgressRef.current = false;
@@ -156,7 +194,10 @@ export function MoodRitual({
   }
 
   const statusFeedback: Feedback = isSubmitting
-    ? { kind: "success", message: "Saving your moment…" }
+    ? {
+        kind: "success",
+        message: isEditMode ? "Saving your changes…" : "Saving your moment…",
+      }
     : (feedback ??
       (loadError
         ? {
@@ -180,22 +221,31 @@ export function MoodRitual({
       <div className="pointer-events-none absolute inset-x-16 top-0 h-px bg-rose/45" />
 
       <div className="text-center">
-        <p className="eyebrow justify-center">A quiet check-in</p>
+        <p className="eyebrow justify-center">
+          {isEditMode ? "Revisit a memory" : "A quiet check-in"}
+        </p>
         <h2
           id="mood-ritual-title"
           className="mt-3 font-display text-[clamp(2rem,3.1vw,2.65rem)] leading-none tracking-[-0.025em] text-primary"
         >
-          How are you feeling?
+          {isEditMode ? "Edit your moment" : "How are you feeling?"}
         </h2>
       </div>
 
       <form
-        aria-label="Create a Moment"
-        aria-busy={isSubmitting}
+        aria-label={isEditMode ? "Edit Moment" : "Create a Moment"}
+        aria-busy={isSubmitting || isMutationPending}
         className="mt-7"
         noValidate
         onSubmit={submitMoment}
       >
+        <fieldset
+          disabled={isHydrating || isSubmitting || isMutationPending}
+          className="m-0 min-w-0 border-0 p-0"
+        >
+          <legend className="sr-only">
+            {isEditMode ? "Edit Moment details" : "Create a Moment details"}
+          </legend>
         <div
           role="group"
           className="grid grid-cols-3 gap-2 sm:grid-cols-6"
@@ -370,9 +420,13 @@ export function MoodRitual({
           />
           <div className="mt-1.5 flex min-h-5 flex-wrap items-center justify-between gap-2 text-xs">
             <p id="moment-image-help" className="text-secondary/85">
-              JPEG, PNG, or WebP · 1 MB maximum
+              {isEditMode && editingMoment?.image && !image
+                ? removeExistingImage
+                  ? "No image will be saved."
+                  : "Current image will be kept."
+                : "JPEG, PNG, or WebP · 1 MB maximum"}
             </p>
-            {image ? (
+            {image || (editingMoment?.image && !removeExistingImage) ? (
               <button
                 type="button"
                 disabled={isSubmitting}
@@ -402,13 +456,32 @@ export function MoodRitual({
           </p>
         </div>
 
-        <button
-          type="submit"
-          disabled={isHydrating || isSubmitting}
-          className="button-primary mx-auto mt-4 flex min-h-12 w-full items-center justify-center px-7 text-sm font-medium disabled:cursor-wait disabled:opacity-65 sm:w-auto"
-        >
-          {isSubmitting ? "Saving Moment…" : "Create a Moment"}
-        </button>
+        <div className="mt-4 flex flex-col justify-center gap-3 sm:flex-row">
+          <button
+            type="submit"
+            disabled={isHydrating || isSubmitting}
+            className="button-primary flex min-h-12 w-full items-center justify-center px-7 text-sm font-medium disabled:cursor-wait disabled:opacity-65 sm:w-auto"
+          >
+            {isSubmitting
+              ? isEditMode
+                ? "Saving Changes…"
+                : "Saving Moment…"
+              : isEditMode
+                ? "Save Changes"
+                : "Create a Moment"}
+          </button>
+          {isEditMode ? (
+            <button
+              type="button"
+              disabled={isSubmitting}
+              className="button-secondary flex min-h-12 w-full items-center justify-center px-7 text-sm font-medium disabled:cursor-wait disabled:opacity-65 sm:w-auto"
+              onClick={onCancelEdit}
+            >
+              Cancel editing
+            </button>
+          ) : null}
+        </div>
+        </fieldset>
       </form>
     </section>
   );

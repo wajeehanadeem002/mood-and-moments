@@ -1,4 +1,8 @@
-import { ArrowRight } from "lucide-react";
+"use client";
+
+import { FormEvent, useEffect, useRef, useState } from "react";
+
+import { ArrowRight, Pencil, Trash2 } from "lucide-react";
 import Image from "next/image";
 
 import { MoodIcon } from "@/components/ui/mood-icon";
@@ -6,11 +10,108 @@ import { moods, recentMoments, type Moment } from "@/data/moments";
 
 type RecentMomentsProps = {
   moments?: readonly Moment[];
+  editableMomentIds?: ReadonlySet<string>;
+  isMutationPending?: boolean;
+  onEditMoment?: (moment: Moment) => void;
+  onDeleteMoment?: (moment: Moment) => Promise<void>;
 };
 
 export function RecentMoments({
   moments = recentMoments,
+  editableMomentIds = new Set(),
+  isMutationPending = false,
+  onEditMoment,
+  onDeleteMoment,
 }: RecentMomentsProps) {
+  const [confirmingMomentId, setConfirmingMomentId] = useState<string | null>(
+    null,
+  );
+  const [deletingMomentId, setDeletingMomentId] = useState<string | null>(null);
+  const [deleteErrorMomentId, setDeleteErrorMomentId] = useState<
+    string | null
+  >(null);
+  const [deleteSucceeded, setDeleteSucceeded] = useState(false);
+  const deleteInProgressRef = useRef(false);
+  const confirmDeleteRef = useRef<HTMLButtonElement>(null);
+  const deleteStatusRef = useRef<HTMLParagraphElement>(null);
+  const deleteButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const restoreDeleteFocusMomentIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (confirmingMomentId && !deletingMomentId) {
+      confirmDeleteRef.current?.focus();
+    }
+  }, [confirmingMomentId, deletingMomentId]);
+
+  useEffect(() => {
+    if (!confirmingMomentId && restoreDeleteFocusMomentIdRef.current) {
+      deleteButtonRefs.current
+        .get(restoreDeleteFocusMomentIdRef.current)
+        ?.focus();
+      restoreDeleteFocusMomentIdRef.current = null;
+    }
+  }, [confirmingMomentId]);
+
+  useEffect(() => {
+    if (deleteSucceeded) {
+      deleteStatusRef.current?.focus();
+    }
+  }, [deleteSucceeded]);
+
+  function editMoment(moment: Moment) {
+    if (deleteInProgressRef.current || isMutationPending) {
+      return;
+    }
+
+    setConfirmingMomentId(null);
+    setDeleteErrorMomentId(null);
+    setDeleteSucceeded(false);
+    onEditMoment?.(moment);
+  }
+
+  function askToDeleteMoment(momentId: string) {
+    if (deleteInProgressRef.current || isMutationPending) {
+      return;
+    }
+
+    setConfirmingMomentId(momentId);
+    setDeleteErrorMomentId(null);
+    setDeleteSucceeded(false);
+    restoreDeleteFocusMomentIdRef.current = null;
+  }
+
+  async function deleteMoment(
+    event: FormEvent<HTMLFormElement>,
+    moment: Moment,
+  ) {
+    event.preventDefault();
+
+    if (
+      deleteInProgressRef.current ||
+      isMutationPending ||
+      !onDeleteMoment
+    ) {
+      return;
+    }
+
+    deleteInProgressRef.current = true;
+    setDeletingMomentId(moment.id);
+    setDeleteErrorMomentId(null);
+    setDeleteSucceeded(false);
+
+    try {
+      await onDeleteMoment(moment);
+      setConfirmingMomentId(null);
+      restoreDeleteFocusMomentIdRef.current = null;
+      setDeleteSucceeded(true);
+    } catch {
+      setDeleteErrorMomentId(moment.id);
+    } finally {
+      deleteInProgressRef.current = false;
+      setDeletingMomentId(null);
+    }
+  }
+
   return (
     <section
       id="moments"
@@ -37,10 +138,26 @@ export function RecentMoments({
           </a>
         </div>
 
+        <p
+          ref={deleteStatusRef}
+          role="status"
+          aria-live="polite"
+          tabIndex={-1}
+          className={`mb-5 min-h-5 text-sm text-champagne transition-opacity ${
+            deleteSucceeded ? "opacity-100" : "sr-only opacity-0"
+          }`}
+        >
+          {deleteSucceeded ? "Moment deleted." : ""}
+        </p>
+
         <div className="border-x border-white/[0.08]">
           {moments.map((moment, index) => {
             const mood = moods.find((item) => item.id === moment.mood);
             const reverse = index % 2 === 1;
+            const isEditable = editableMomentIds.has(moment.id);
+            const isConfirmingDelete = confirmingMomentId === moment.id;
+            const isDeleting = deletingMomentId === moment.id;
+            const hasDeleteError = deleteErrorMomentId === moment.id;
 
             return (
               <article
@@ -97,12 +214,93 @@ export function RecentMoments({
                   <p className="mt-5 max-w-[34rem] text-[0.95rem] leading-7 text-secondary sm:text-base">
                     {moment.excerpt}
                   </p>
-                  <span
-                    aria-hidden="true"
-                    className="mt-8 inline-flex size-11 items-center justify-center self-end rounded-full border border-white/10 text-primary transition duration-300 group-hover:border-rose/50 group-hover:text-rose-soft"
-                  >
-                    <ArrowRight aria-hidden="true" className="size-5" />
-                  </span>
+
+                  {isEditable && onEditMoment && onDeleteMoment ? (
+                    <div className="mt-8 border-t border-white/[0.08] pt-5">
+                      {isConfirmingDelete ? (
+                        <form
+                          role="group"
+                          aria-label={`Delete ${moment.title}?`}
+                          aria-busy={isDeleting}
+                          onSubmit={(event) => deleteMoment(event, moment)}
+                          className="rounded-sm border border-rose/25 bg-rose/[0.07] p-4"
+                        >
+                          <p className="text-sm leading-6 text-primary">
+                            Delete this moment? This cannot be undone.
+                          </p>
+                          <div className="mt-3 flex flex-col gap-2 min-[420px]:flex-row">
+                            <button
+                              ref={confirmDeleteRef}
+                              type="submit"
+                              disabled={isDeleting || isMutationPending}
+                              className="inline-flex min-h-11 items-center justify-center rounded-sm bg-rose px-4 text-sm font-medium text-white transition hover:bg-rose/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-soft/70 disabled:cursor-wait disabled:opacity-65"
+                            >
+                              {isDeleting ? "Deleting…" : "Confirm delete"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isDeleting || isMutationPending}
+                              onClick={() => {
+                                setConfirmingMomentId(null);
+                                setDeleteErrorMomentId(null);
+                                restoreDeleteFocusMomentIdRef.current =
+                                  moment.id;
+                              }}
+                              className="inline-flex min-h-11 items-center justify-center rounded-sm border border-white/10 px-4 text-sm font-medium text-secondary transition hover:border-white/20 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lavender/60 disabled:cursor-wait disabled:opacity-65"
+                            >
+                              Keep moment
+                            </button>
+                          </div>
+                          {hasDeleteError ? (
+                            <p
+                              role="alert"
+                              className="mt-3 text-sm leading-6 text-rose-soft"
+                            >
+                              We couldn’t delete this moment. Check browser
+                              storage and try again.
+                            </p>
+                          ) : null}
+                        </form>
+                      ) : (
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <button
+                            type="button"
+                            disabled={isMutationPending}
+                            onClick={() => editMoment(moment)}
+                            className="inline-flex min-h-11 items-center gap-2 rounded-sm border border-white/10 px-4 text-sm font-medium text-secondary transition hover:border-lavender/40 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lavender/60 disabled:cursor-wait disabled:opacity-55"
+                            aria-label={`Edit ${moment.title}`}
+                          >
+                            <Pencil aria-hidden="true" className="size-4" />
+                            Edit
+                          </button>
+                          <button
+                            ref={(button) => {
+                              if (button) {
+                                deleteButtonRefs.current.set(moment.id, button);
+                              } else {
+                                deleteButtonRefs.current.delete(moment.id);
+                              }
+                            }}
+                            type="button"
+                            disabled={isMutationPending}
+                            onClick={() => askToDeleteMoment(moment.id)}
+                            className="inline-flex min-h-11 items-center gap-2 rounded-sm border border-white/10 px-4 text-sm font-medium text-secondary transition hover:border-rose/45 hover:text-rose-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-soft/70 disabled:cursor-wait disabled:opacity-55"
+                            aria-label={`Delete ${moment.title}`}
+                          >
+                            <Trash2 aria-hidden="true" className="size-4" />
+                            Delete
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <span
+                      aria-hidden="true"
+                      className="mt-8 inline-flex size-11 items-center justify-center self-end rounded-full border border-white/10 text-primary transition duration-300 group-hover:border-rose/50 group-hover:text-rose-soft"
+                    >
+                      <ArrowRight aria-hidden="true" className="size-5" />
+                    </span>
+                  )}
                 </div>
               </article>
             );
