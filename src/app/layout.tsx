@@ -1,3 +1,4 @@
+import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import { Cormorant_Garamond, Geist } from "next/font/google";
 import "./globals.css";
@@ -25,7 +26,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${geistSans.variable} ${cormorant.variable} h-full antialiased`}
     >
-      <body className="min-h-full">{children}</body>
+      <body className="min-h-full">
+        <ClerkProvider signInUrl="/sign-in" signUpUrl="/sign-up">
+          {children}
+        </ClerkProvider>
+      </body>
     </html>
   );
 }

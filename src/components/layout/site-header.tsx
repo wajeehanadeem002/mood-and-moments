@@ -1,5 +1,11 @@
 "use client";
 
+import {
+  Show,
+  SignInButton,
+  SignUpButton,
+  UserButton,
+} from "@clerk/nextjs";
 import { Menu, X } from "lucide-react";
 import { useState } from "react";
 
@@ -48,12 +54,45 @@ export function SiteHeader() {
           </ul>
         </nav>
 
-        <a
-          href="#moods"
-          className="button-primary hidden min-h-12 items-center justify-center px-6 text-sm font-medium min-[900px]:inline-flex"
-        >
-          Create a Moment
-        </a>
+        <div className="hidden items-center gap-3 min-[900px]:flex">
+          <Show when="signed-out">
+            <SignInButton mode="redirect" fallbackRedirectUrl="/#moods">
+              <button
+                type="button"
+                className="inline-flex min-h-12 items-center justify-center rounded-sm px-3 text-sm font-medium text-secondary transition-colors hover:text-primary focus-visible:outline-none"
+              >
+                Sign in
+              </button>
+            </SignInButton>
+            <SignUpButton mode="redirect" fallbackRedirectUrl="/#moods">
+              <button
+                type="button"
+                className="button-primary inline-flex min-h-12 items-center justify-center px-5 text-sm font-medium"
+              >
+                Sign up
+              </button>
+            </SignUpButton>
+          </Show>
+
+          <Show when="signed-in">
+            <a
+              href="#moods"
+              className="button-primary inline-flex min-h-12 items-center justify-center px-5 text-sm font-medium"
+            >
+              Create a Moment
+            </a>
+            <div aria-label="Account" className="inline-flex items-center">
+              <UserButton
+                appearance={{
+                  elements: {
+                    avatarBox:
+                      "size-10 border border-champagne/30 shadow-[0_0_0_3px_rgba(255,255,255,0.03)]",
+                  },
+                }}
+              />
+            </div>
+          </Show>
+        </div>
 
         <button
           type="button"
@@ -89,15 +128,46 @@ export function SiteHeader() {
                 </a>
               </li>
             ))}
-            <li className="pt-3">
-              <a
-                href="#moods"
-                className="button-primary flex min-h-12 w-full items-center justify-center px-5 text-sm font-medium"
-                onClick={() => setIsOpen(false)}
-              >
-                Create a Moment
-              </a>
-            </li>
+            <Show when="signed-out">
+              <li className="pt-3">
+                <SignInButton mode="redirect" fallbackRedirectUrl="/#moods">
+                  <button
+                    type="button"
+                    className="button-secondary flex min-h-12 w-full items-center justify-center px-5 text-sm font-medium"
+                    onClick={() => setIsOpen(false)}
+                  >
+                    Sign in
+                  </button>
+                </SignInButton>
+              </li>
+              <li>
+                <SignUpButton mode="redirect" fallbackRedirectUrl="/#moods">
+                  <button
+                    type="button"
+                    className="button-primary flex min-h-12 w-full items-center justify-center px-5 text-sm font-medium"
+                    onClick={() => setIsOpen(false)}
+                  >
+                    Sign up
+                  </button>
+                </SignUpButton>
+              </li>
+            </Show>
+
+            <Show when="signed-in">
+              <li className="pt-3">
+                <a
+                  href="#moods"
+                  className="button-primary flex min-h-12 w-full items-center justify-center px-5 text-sm font-medium"
+                  onClick={() => setIsOpen(false)}
+                >
+                  Create a Moment
+                </a>
+              </li>
+              <li className="flex min-h-12 items-center justify-between rounded-sm px-4 text-sm text-secondary">
+                <span>Account</span>
+                <UserButton />
+              </li>
+            </Show>
           </ul>
         </nav>
       ) : null}

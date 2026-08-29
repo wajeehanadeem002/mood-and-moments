@@ -10,6 +10,7 @@ import type {
 type HeroProps = {
   isHydrating: boolean;
   loadError: boolean;
+  isAuthenticated?: boolean;
   isMutationPending?: boolean;
   editingMoment?: Moment | null;
   onCreateMoment: (draft: MomentDraft) => Promise<void>;
@@ -18,16 +19,19 @@ type HeroProps = {
     options: UpdateMomentOptions,
   ) => Promise<void>;
   onCancelEdit?: () => void;
+  onRequireAuthentication?: () => void;
 };
 
 export function Hero({
   isHydrating,
   loadError,
+  isAuthenticated = true,
   isMutationPending = false,
   editingMoment = null,
   onCreateMoment,
   onUpdateMoment,
   onCancelEdit,
+  onRequireAuthentication,
 }: HeroProps) {
   return (
     <section
@@ -60,7 +64,13 @@ export function Hero({
 
           <div className="mt-9 flex flex-col gap-3 sm:flex-row sm:items-center">
             <a
-              href="#moods"
+              href={isAuthenticated ? "#moods" : "/sign-in"}
+              onClick={(event) => {
+                if (!isAuthenticated && onRequireAuthentication) {
+                  event.preventDefault();
+                  onRequireAuthentication();
+                }
+              }}
               className="button-primary inline-flex min-h-12 items-center justify-center px-7 text-sm font-medium"
             >
               Create a Moment
@@ -83,11 +93,13 @@ export function Hero({
           key={editingMoment?.id ?? "create"}
           isHydrating={isHydrating}
           loadError={loadError}
+          isAuthenticated={isAuthenticated}
           isMutationPending={isMutationPending}
           editingMoment={editingMoment}
           onCreateMoment={onCreateMoment}
           onUpdateMoment={onUpdateMoment}
           onCancelEdit={onCancelEdit}
+          onRequireAuthentication={onRequireAuthentication}
         />
       </div>
     </section>

@@ -10,8 +10,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { recentMoments } from "@/data/moments";
 import { MOMENTS_STORAGE_KEY } from "@/repositories/local-storage-moment-repository";
+import { setClerkTestAuthState } from "@/test/clerk-test-state";
 
 import Home from "./page";
+
+const pushMock = vi.hoisted(() => vi.fn());
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: pushMock }),
+}));
 
 function fillMomentForm() {
   const form = screen.getByRole("form", { name: "Create a Moment" });
@@ -41,7 +48,10 @@ function getSectionByHeading(name: string): HTMLElement {
 }
 
 describe("Mood & Moments homepage", () => {
-  beforeEach(() => window.localStorage.clear());
+  beforeEach(() => {
+    window.localStorage.clear();
+    pushMock.mockReset();
+  });
   afterEach(() => vi.restoreAllMocks());
 
   it("renders the complete single-page experience with semantic landmarks", async () => {
@@ -240,6 +250,59 @@ describe("Mood & Moments homepage", () => {
 
     expect(screen.queryByRole("button", { name: /^Edit / })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Delete / })).toBeNull();
+  });
+
+  it("keeps static Moments public and local Moments private when signed out", async () => {
+    setClerkTestAuthState({ isSignedIn: false, userId: null });
+    window.localStorage.setItem(
+      MOMENTS_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: "private-local-moment",
+          date: "Aug 28, 2026",
+          dateTime: "2026-08-28T09:00:00+05:00",
+          time: "9:00 AM",
+          mood: "calm",
+          title: "A private local memory",
+          excerpt: "This should only appear after authentication.",
+        },
+      ]),
+    );
+    const storageRead = vi.spyOn(Storage.prototype, "getItem");
+
+    render(<Home />);
+
+    expect(
+      await screen.findByText("Sign in to create and keep personal moments."),
+    ).not.toBeNull();
+    expect(screen.getAllByRole("article")).toHaveLength(3);
+    expect(screen.getAllByText("Slow Sunday light")).toHaveLength(2);
+    expect(screen.queryByText("A private local memory")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Edit / })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Delete / })).toBeNull();
+    expect(storageRead).not.toHaveBeenCalled();
+  });
+
+  it("directs signed-out Moment creation to sign-in without changing storage", async () => {
+    setClerkTestAuthState({ isSignedIn: false, userId: null });
+    const originalStoredValue = JSON.stringify([]);
+    window.localStorage.setItem(MOMENTS_STORAGE_KEY, originalStoredValue);
+
+    render(<Home />);
+    await screen.findByText("Sign in to create and keep personal moments.");
+    const form = fillMomentForm();
+
+    fireEvent.click(
+      within(form).getByRole("button", { name: "Create a Moment" }),
+    );
+
+    expect(pushMock).toHaveBeenCalledTimes(1);
+    expect(pushMock).toHaveBeenCalledWith("/sign-in");
+    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).toBe(
+      originalStoredValue,
+    );
+    expect(screen.queryByText("Your moment has been saved.")).toBeNull();
+    expect(screen.queryByText("First rain of the season")).toBeNull();
   });
 
   it("does not duplicate or unlock a static example with a colliding stored id", async () => {

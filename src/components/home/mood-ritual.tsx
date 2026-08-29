@@ -20,6 +20,7 @@ type Feedback = {
 type MoodRitualProps = {
   isHydrating: boolean;
   loadError: boolean;
+  isAuthenticated?: boolean;
   isMutationPending?: boolean;
   editingMoment?: Moment | null;
   onCreateMoment: (draft: MomentDraft) => Promise<void>;
@@ -28,6 +29,7 @@ type MoodRitualProps = {
     options: UpdateMomentOptions,
   ) => Promise<void>;
   onCancelEdit?: () => void;
+  onRequireAuthentication?: () => void;
 };
 
 const accentText: Record<(typeof moods)[number]["accent"], string> = {
@@ -42,11 +44,13 @@ const fieldClassName =
 export function MoodRitual({
   isHydrating,
   loadError,
+  isAuthenticated = true,
   isMutationPending = false,
   editingMoment = null,
   onCreateMoment,
   onUpdateMoment,
   onCancelEdit,
+  onRequireAuthentication,
 }: MoodRitualProps) {
   const [selectedMoodId, setSelectedMoodId] = useState<MoodId>(
     editingMoment?.mood ?? "happy",
@@ -122,6 +126,11 @@ export function MoodRitual({
 
   async function submitMoment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
+    if (!isAuthenticated) {
+      onRequireAuthentication?.();
+      return;
+    }
 
     if (submissionInProgressRef.current) {
       return;
@@ -208,7 +217,9 @@ export function MoodRitual({
             kind: "success",
             message: isHydrating
               ? "Loading your saved moments…"
-              : "Your moments are saved in this browser.",
+              : isAuthenticated
+                ? "Your moments are saved in this browser."
+                : "Sign in to create and keep personal moments.",
           }));
 
   return (

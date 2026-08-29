@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { setClerkTestAuthState } from "@/test/clerk-test-state";
+
 import { SiteHeader } from "./site-header";
 
 describe("SiteHeader", () => {
@@ -16,5 +18,26 @@ describe("SiteHeader", () => {
     ).not.toBeNull();
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("shows sign-in and sign-up actions when signed out", () => {
+    setClerkTestAuthState({ isSignedIn: false, userId: null });
+
+    render(<SiteHeader />);
+
+    expect(screen.getByRole("button", { name: "Sign in" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Sign up" })).not.toBeNull();
+    expect(screen.queryByLabelText("Account")).toBeNull();
+  });
+
+  it("shows the account control and creation action when signed in", () => {
+    render(<SiteHeader />);
+
+    expect(screen.getByLabelText("Account")).not.toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Create a Moment" }),
+    ).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Sign up" })).toBeNull();
   });
 });

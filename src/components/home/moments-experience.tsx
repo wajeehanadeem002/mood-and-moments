@@ -1,5 +1,7 @@
 "use client";
 
+import { useAuth } from "@clerk/nextjs";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { Hero } from "@/components/home/hero";
@@ -32,16 +34,51 @@ const staticMomentIds = new Set(
 );
 
 export function MomentsExperience() {
+  const { isLoaded, isSignedIn, userId } = useAuth();
+  const router = useRouter();
+  const isAuthenticated = Boolean(isLoaded && isSignedIn && userId);
+  const sessionKey = !isLoaded
+    ? "loading"
+    : isAuthenticated
+      ? `signed-in:${userId}`
+      : "signed-out";
+
+  return (
+    <MomentsExperienceSession
+      key={sessionKey}
+      isAuthenticated={isAuthenticated}
+      isAuthenticationLoading={!isLoaded}
+      onRequireAuthentication={() => router.push("/sign-in")}
+    />
+  );
+}
+
+type MomentsExperienceSessionProps = {
+  isAuthenticated: boolean;
+  isAuthenticationLoading: boolean;
+  onRequireAuthentication: () => void;
+};
+
+function MomentsExperienceSession({
+  isAuthenticated,
+  isAuthenticationLoading,
+  onRequireAuthentication,
+}: MomentsExperienceSessionProps) {
   const repositoryRef = useRef<MomentRepository | null>(null);
   const mutationInProgressRef = useRef(false);
   const [savedMoments, setSavedMoments] = useState<Moment[]>([]);
-  const [hydrationState, setHydrationState] =
-    useState<HydrationState>("loading");
+  const [hydrationState, setHydrationState] = useState<HydrationState>(
+    isAuthenticated || isAuthenticationLoading ? "loading" : "ready",
+  );
   const [editingMomentId, setEditingMomentId] = useState<string | null>(null);
   const [isMutationPending, setIsMutationPending] = useState(false);
 
   useEffect(() => {
     let isCurrent = true;
+
+    if (!isAuthenticated) {
+      return;
+    }
 
     async function loadSavedMoments() {
       const repository = new LocalStorageMomentRepository(window.localStorage);
@@ -66,7 +103,7 @@ export function MomentsExperience() {
       isCurrent = false;
       repositoryRef.current = null;
     };
-  }, []);
+  }, [isAuthenticated]);
 
   async function runMomentMutation<T>(
     mutation: () => Promise<T>,
@@ -87,6 +124,11 @@ export function MomentsExperience() {
   }
 
   async function handleCreateMoment(draft: MomentDraft) {
+    if (!isAuthenticated) {
+      onRequireAuthentication();
+      return;
+    }
+
     return runMomentMutation(async () => {
       if (!repositoryRef.current) {
         throw new Error("Moment storage is not ready.");
@@ -188,11 +230,13 @@ export function MomentsExperience() {
       <Hero
         isHydrating={hydrationState === "loading"}
         loadError={hydrationState === "error"}
+        isAuthenticated={isAuthenticated}
         isMutationPending={isMutationPending}
         editingMoment={editingMoment}
         onCreateMoment={handleCreateMoment}
         onUpdateMoment={handleUpdateMoment}
         onCancelEdit={() => setEditingMomentId(null)}
+        onRequireAuthentication={onRequireAuthentication}
       />
       <RecentMoments
         moments={displayedRecentMoments}
