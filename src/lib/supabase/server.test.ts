@@ -14,7 +14,10 @@ vi.mock("@supabase/supabase-js", () => ({
   createClient: createClientMock,
 }));
 
-import { createAuthenticatedSupabaseClient } from "./server";
+import {
+  createAuthenticatedSupabaseClient,
+  SupabaseAuthenticationError,
+} from "./server";
 
 describe("createAuthenticatedSupabaseClient", () => {
   beforeEach(() => {
@@ -64,8 +67,11 @@ describe("createAuthenticatedSupabaseClient", () => {
       userId: null,
     });
 
-    await expect(createAuthenticatedSupabaseClient()).rejects.toThrow(
-      "Authentication is required to access Supabase.",
+    await expect(createAuthenticatedSupabaseClient()).rejects.toEqual(
+      expect.objectContaining({
+        message: "Authentication is required to access Supabase.",
+        name: SupabaseAuthenticationError.name,
+      }),
     );
     expect(getTokenMock).not.toHaveBeenCalled();
     expect(createClientMock).not.toHaveBeenCalled();
@@ -74,8 +80,11 @@ describe("createAuthenticatedSupabaseClient", () => {
   it("rejects an authenticated request when Clerk has no session token", async () => {
     getTokenMock.mockResolvedValue(null);
 
-    await expect(createAuthenticatedSupabaseClient()).rejects.toThrow(
-      "Clerk did not provide a Supabase session token.",
+    await expect(createAuthenticatedSupabaseClient()).rejects.toEqual(
+      expect.objectContaining({
+        message: "Clerk did not provide a Supabase session token.",
+        name: SupabaseAuthenticationError.name,
+      }),
     );
     expect(createClientMock).not.toHaveBeenCalled();
   });

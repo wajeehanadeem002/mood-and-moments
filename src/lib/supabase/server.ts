@@ -1,6 +1,13 @@
 import { auth } from "@clerk/nextjs/server";
 import { createClient } from "@supabase/supabase-js";
 
+export class SupabaseAuthenticationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SupabaseAuthenticationError";
+  }
+}
+
 function requireEnvironmentVariable(name: string): string {
   const value = process.env[name]?.trim();
 
@@ -15,13 +22,17 @@ export async function createAuthenticatedSupabaseClient() {
   const { getToken, isAuthenticated, userId } = await auth();
 
   if (!isAuthenticated || !userId) {
-    throw new Error("Authentication is required to access Supabase.");
+    throw new SupabaseAuthenticationError(
+      "Authentication is required to access Supabase.",
+    );
   }
 
   const token = await getToken();
 
   if (!token) {
-    throw new Error("Clerk did not provide a Supabase session token.");
+    throw new SupabaseAuthenticationError(
+      "Clerk did not provide a Supabase session token.",
+    );
   }
 
   const supabaseUrl = requireEnvironmentVariable("SUPABASE_URL");
