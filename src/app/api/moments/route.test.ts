@@ -44,6 +44,37 @@ function authenticateWith(client: object) {
   });
 }
 
+function addStorage(client: object) {
+  const bucket = {
+    download: vi.fn(),
+    remove: vi.fn().mockResolvedValue({ data: [], error: null }),
+    update: vi.fn(),
+    upload: vi.fn().mockResolvedValue({ data: {}, error: null }),
+  };
+  const from = vi.fn().mockReturnValue(bucket);
+  Object.assign(client, { storage: { from } });
+
+  return { bucket, from };
+}
+
+function validPng() {
+  return new File(
+    [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+    "memory.png",
+    { type: "image/png" },
+  );
+}
+
+function multipartRequest(formData: FormData) {
+  const request = new Request("http://localhost/api/moments", {
+    method: "POST",
+    headers: { "content-type": "multipart/form-data; boundary=test" },
+  });
+  vi.spyOn(request, "formData").mockResolvedValue(formData);
+
+  return request;
+}
+
 describe("/api/moments", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -103,6 +134,75 @@ describe("/api/moments", () => {
       mood: "calm",
       moment_date: "2026-08-29",
     });
+  });
+
+  it("uploads a validated image to the server-constructed private path", async () => {
+    const imagePath = `user_a/${row.id}/image`;
+    const imageRow = { ...row, image_path: imagePath };
+    const { client, queries } = createSupabaseClientDouble(
+      { data: row, error: null },
+      { data: imageRow, error: null },
+    );
+    const { bucket, from } = addStorage(client);
+    authenticateWith(client);
+    const formData = new FormData();
+    formData.set("title", "A quiet morning");
+    formData.set("description", "Sunlight crossed the room.");
+    formData.set("mood", "calm");
+    formData.set("date", "2026-08-29");
+    formData.set("image", validPng());
+    const request = multipartRequest(formData);
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual({
+      moment: {
+        ...moment,
+        image: {
+          src: `/api/moments/${row.id}/image`,
+          alt: "A quiet morning moment image.",
+        },
+      },
+    });
+    expect(from).toHaveBeenCalledWith("moment-images");
+    expect(bucket.upload).toHaveBeenCalledWith(
+      imagePath,
+      expect.any(File),
+      expect.objectContaining({ contentType: "image/png", upsert: false }),
+    );
+    expect(queries[1]!.update).toHaveBeenCalledWith(
+      expect.objectContaining({ image_path: imagePath }),
+    );
+  });
+
+  it("rejects a multipart image whose declared type does not match its bytes", async () => {
+    const { client, from } = createSupabaseClientDouble();
+    addStorage(client);
+    authenticateWith(client);
+    const formData = new FormData();
+    formData.set("title", "A quiet morning");
+    formData.set("description", "Sunlight crossed the room.");
+    formData.set("mood", "calm");
+    formData.set("date", "2026-08-29");
+    formData.set(
+      "image",
+      new File([new Uint8Array([0xff, 0xd8, 0xff])], "spoof.png", {
+        type: "image/png",
+      }),
+    );
+
+    const response = await POST(multipartRequest(formData));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Moment details are invalid.",
+        fields: { image: "The image contents do not match its file type." },
+      },
+    });
+    expect(from).not.toHaveBeenCalled();
   });
 
   it("rejects malformed JSON", async () => {

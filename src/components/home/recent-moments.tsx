@@ -175,7 +175,10 @@ export function RecentMoments({
                       alt={moment.image.alt}
                       width={1536}
                       height={1024}
-                      unoptimized={moment.image.src.startsWith("data:")}
+                      unoptimized={
+                        moment.image.src.startsWith("data:") ||
+                        moment.image.src.startsWith("/api/moments/")
+                      }
                       sizes="(max-width: 639px) calc(100vw - 40px), (max-width: 899px) calc(100vw - 64px), (max-width: 1023px) calc((100vw - 64px) / 2), (max-width: 1439px) calc((100vw - 96px) / 2), 672px"
                       className="h-full w-full object-cover transition duration-700 group-hover:scale-[1.025]"
                     />

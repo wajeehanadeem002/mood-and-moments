@@ -8,6 +8,10 @@ const TEST_IMAGE = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z4yQAAAAASUVORK5CYII=",
   "base64",
 );
+const REPLACEMENT_IMAGE = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
 
 function requireEnvironmentVariable(name) {
   const value = process.env[name]?.trim();
@@ -113,7 +117,7 @@ async function run() {
       publishableKey,
       otherUser.token,
     );
-    objectPath = `${owner.userId}/${runId}/test-image.png`;
+    objectPath = `${owner.userId}/${runId}/image`;
 
     const upload = await ownerClient.storage.from(BUCKET_NAME).upload(
       objectPath,
@@ -128,6 +132,80 @@ async function run() {
       upload.error?.message,
     );
 
+    const crossUserDownload = await otherClient.storage
+      .from(BUCKET_NAME)
+      .download(objectPath);
+    recordResult(
+      results,
+      Boolean(crossUserDownload.error) && !crossUserDownload.data,
+      "another authenticated user cannot read the owner's object",
+      crossUserDownload.error?.message,
+    );
+
+    const ownerReplacement = await ownerClient.storage
+      .from(BUCKET_NAME)
+      .update(objectPath, REPLACEMENT_IMAGE, {
+        contentType: "image/png",
+        upsert: false,
+      });
+    const afterOwnerReplacement = await ownerClient.storage
+      .from(BUCKET_NAME)
+      .download(objectPath);
+    const replacementBytes = afterOwnerReplacement.data
+      ? Buffer.from(await afterOwnerReplacement.data.arrayBuffer())
+      : null;
+    recordResult(
+      results,
+      !ownerReplacement.error &&
+        !afterOwnerReplacement.error &&
+        replacementBytes?.equals(REPLACEMENT_IMAGE) === true,
+      "the owner can replace their own object at the stable path",
+      ownerReplacement.error?.message ?? afterOwnerReplacement.error?.message,
+    );
+
+    const crossUserReplacement = await otherClient.storage
+      .from(BUCKET_NAME)
+      .update(objectPath, TEST_IMAGE, {
+        contentType: "image/png",
+        upsert: false,
+      });
+    const afterCrossUserReplacement = await ownerClient.storage
+      .from(BUCKET_NAME)
+      .download(objectPath);
+    const preservedBytes = afterCrossUserReplacement.data
+      ? Buffer.from(await afterCrossUserReplacement.data.arrayBuffer())
+      : null;
+    recordResult(
+      results,
+      Boolean(crossUserReplacement.error) &&
+        !afterCrossUserReplacement.error &&
+        preservedBytes?.equals(REPLACEMENT_IMAGE) === true,
+      "another authenticated user cannot replace the owner's object",
+      crossUserReplacement.error?.message ??
+        afterCrossUserReplacement.error?.message,
+    );
+
+    const ownerRestore = await ownerClient.storage
+      .from(BUCKET_NAME)
+      .upload(objectPath, TEST_IMAGE, {
+        contentType: "image/png",
+        upsert: true,
+      });
+    const afterOwnerRestore = await ownerClient.storage
+      .from(BUCKET_NAME)
+      .download(objectPath);
+    const restoredBytes = afterOwnerRestore.data
+      ? Buffer.from(await afterOwnerRestore.data.arrayBuffer())
+      : null;
+    recordResult(
+      results,
+      !ownerRestore.error &&
+        !afterOwnerRestore.error &&
+        restoredBytes?.equals(TEST_IMAGE) === true,
+      "the owner-scoped policies permit compensating object restoration",
+      ownerRestore.error?.message ?? afterOwnerRestore.error?.message,
+    );
+
     const crossUserDelete = await otherClient.storage
       .from(BUCKET_NAME)
       .remove([objectPath]);
@@ -139,6 +217,34 @@ async function run() {
       !afterCrossUserDelete.error && Boolean(afterCrossUserDelete.data),
       "another authenticated user cannot delete the owner's object",
       crossUserDelete.error?.message ?? afterCrossUserDelete.error?.message,
+    );
+
+    const invalidMimePath = `${owner.userId}/${randomUUID()}/image`;
+    const invalidMimeUpload = await ownerClient.storage
+      .from(BUCKET_NAME)
+      .upload(invalidMimePath, Buffer.from("not an image"), {
+        contentType: "text/plain",
+        upsert: false,
+      });
+    recordResult(
+      results,
+      Boolean(invalidMimeUpload.error),
+      "the bucket rejects unsupported MIME types",
+      invalidMimeUpload.error?.message,
+    );
+
+    const oversizedPath = `${owner.userId}/${randomUUID()}/image`;
+    const oversizedUpload = await ownerClient.storage
+      .from(BUCKET_NAME)
+      .upload(oversizedPath, Buffer.alloc(1_000_001), {
+        contentType: "image/png",
+        upsert: false,
+      });
+    recordResult(
+      results,
+      Boolean(oversizedUpload.error),
+      "the bucket rejects images larger than one million bytes",
+      oversizedUpload.error?.message,
     );
 
     const ownerDelete = await ownerClient.storage

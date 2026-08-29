@@ -173,6 +173,11 @@ export function MoodRitual({
         }
 
         await onUpdateMoment(draft, { removeImage: removeExistingImage });
+        setImage(null);
+        setRemoveExistingImage(false);
+        if (imageRef.current) {
+          imageRef.current.value = "";
+        }
         setFeedback({
           kind: "success",
           message: "Your moment has been updated.",

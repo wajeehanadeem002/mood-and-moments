@@ -41,19 +41,58 @@ function formatDate(date: string): string {
   }).format(new Date(`${date}T00:00:00Z`));
 }
 
-function momentFromInput(input: ApiMomentInput, existing?: Moment): Moment {
+function momentFromInput(
+  input: ApiMomentInput,
+  existing?: Moment,
+  imageAction: "keep" | "remove" | "replace" = "keep",
+): Moment {
   createdMomentCount += existing ? 0 : 1;
+  const id =
+    existing?.id ??
+    `00000000-0000-4000-8000-${String(createdMomentCount).padStart(12, "0")}`;
+  const hasImage =
+    imageAction === "replace" ||
+    (imageAction === "keep" && Boolean(existing?.image));
 
   return {
-    id:
-      existing?.id ??
-      `00000000-0000-4000-8000-${String(createdMomentCount).padStart(12, "0")}`,
+    id,
     date: formatDate(input.date),
     dateTime: `${input.date}${existing?.dateTime.slice(10) ?? "T09:15:00Z"}`,
     time: existing?.time ?? "9:15 AM",
     mood: input.mood,
     title: input.title,
     excerpt: input.description,
+    ...(hasImage
+      ? {
+          image: {
+            src: `/api/moments/${id}/image`,
+            alt: `${input.title} moment image.`,
+          },
+        }
+      : {}),
+  };
+}
+
+function parseMomentBody(body: BodyInit | null | undefined) {
+  if (body instanceof FormData) {
+    return {
+      input: {
+        title: String(body.get("title")),
+        description: String(body.get("description")),
+        mood: String(body.get("mood")) as Moment["mood"],
+        date: String(body.get("date")),
+      },
+      imageAction: (body.get("imageAction") ??
+        (body.get("image") ? "replace" : "keep")) as
+        | "keep"
+        | "remove"
+        | "replace",
+    };
+  }
+
+  return {
+    input: JSON.parse(String(body)) as ApiMomentInput,
+    imageAction: "keep" as const,
   };
 }
 
@@ -68,9 +107,8 @@ function installMomentApi() {
       }
 
       if (url === "/api/moments" && method === "POST") {
-        const moment = momentFromInput(
-          JSON.parse(String(init?.body)) as ApiMomentInput,
-        );
+        const { imageAction, input } = parseMomentBody(init?.body);
+        const moment = momentFromInput(input, undefined, imageAction);
         apiMoments = [moment, ...apiMoments];
         return jsonResponse({ moment }, 201);
       }
@@ -86,9 +124,11 @@ function installMomentApi() {
       }
 
       if (method === "PATCH") {
+        const { imageAction, input } = parseMomentBody(init?.body);
         const moment = momentFromInput(
-          JSON.parse(String(init?.body)) as ApiMomentInput,
+          input,
           apiMoments[existingIndex],
+          imageAction,
         );
         apiMoments = apiMoments.map((candidate) =>
           candidate.id === id ? moment : candidate,
@@ -305,8 +345,8 @@ describe("Mood & Moments homepage", () => {
     expect(imageInput.getAttribute("aria-invalid")).toBe("true");
   });
 
-  it("does not silently discard a valid image while cloud image storage is deferred", async () => {
-    render(<Home />);
+  it("stores a valid image and restores its private proxy after refresh", async () => {
+    const firstRender = render(<Home />);
     await waitForCloudReady();
     const form = fillMomentForm();
     const imageInput = within(form).getByLabelText("Add an image (optional)");
@@ -314,7 +354,7 @@ describe("Mood & Moments homepage", () => {
       function mockImageRead(this: FileReader) {
         Object.defineProperty(this, "result", {
           configurable: true,
-          value: "data:image/png;base64,aW1hZ2U=",
+          value: "data:image/png;base64,iVBORw0KGgo=",
         });
         this.dispatchEvent(new ProgressEvent("load"));
       },
@@ -322,20 +362,113 @@ describe("Mood & Moments homepage", () => {
 
     fireEvent.change(imageInput, {
       target: {
-        files: [new File(["image"], "memory.png", { type: "image/png" })],
+        files: [
+          new File(
+            [
+              new Uint8Array([
+                0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+              ]),
+            ],
+            "memory.png",
+            { type: "image/png" },
+          ),
+        ],
       },
     });
     fireEvent.click(
       within(form).getByRole("button", { name: "Create a Moment" }),
     );
 
+    expect(await screen.findByText("Your moment has been saved.")).not.toBeNull();
     expect(
-      await within(form).findByText(
-        "We couldn’t save this moment. Please try again.",
-      ),
-    ).not.toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("Your moment has been saved.")).toBeNull();
+      screen
+        .getByRole("img", {
+          name: "First rain of the season moment image.",
+        })
+        .getAttribute("src"),
+    ).toMatch(/^\/api\/moments\/.+\/image$/);
+
+    firstRender.unmount();
+    render(<Home />);
+
+    expect(
+      (await screen.findByRole("img", {
+        name: "First rain of the season moment image.",
+      })).getAttribute("src"),
+    ).toMatch(/^\/api\/moments\/.+\/image$/);
+  });
+
+  it("replaces and removes an authenticated image through existing edit controls", async () => {
+    const id = "00000000-0000-4000-8000-000000000099";
+    apiMoments = [
+      {
+        id,
+        date: "Aug 29, 2026",
+        dateTime: "2026-08-29T09:15:00Z",
+        time: "9:15 AM",
+        mood: "calm",
+        title: "A cloud image",
+        excerpt: "This image can be changed safely.",
+        image: {
+          src: `/api/moments/${id}/image`,
+          alt: "A cloud image moment image.",
+        },
+      },
+    ];
+    render(<Home />);
+    await waitForCloudReady();
+    fireEvent.click(screen.getByRole("button", { name: "Edit A cloud image" }));
+    let editForm = screen.getByRole("form", { name: "Edit Moment" });
+    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(
+      function mockImageRead(this: FileReader) {
+        Object.defineProperty(this, "result", {
+          configurable: true,
+          value: "data:image/webp;base64,UklGRgQAAABXRUJQ",
+        });
+        this.dispatchEvent(new ProgressEvent("load"));
+      },
+    );
+    fireEvent.change(within(editForm).getByLabelText("Add an image (optional)"), {
+      target: {
+        files: [
+          new File(
+            [
+              new Uint8Array([
+                0x52, 0x49, 0x46, 0x46, 0x04, 0x00, 0x00, 0x00, 0x57, 0x45,
+                0x42, 0x50,
+              ]),
+            ],
+            "replacement.webp",
+            { type: "image/webp" },
+          ),
+        ],
+      },
+    });
+    fireEvent.click(within(editForm).getByRole("button", { name: "Save Changes" }));
+
+    await within(editForm).findByText("Your moment has been updated.");
+    const replacementCall = fetchMock.mock.calls.find(
+      ([, init]) =>
+        init?.method === "PATCH" &&
+        init.body instanceof FormData &&
+        init.body.get("imageAction") === "replace",
+    );
+    expect(replacementCall).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit A cloud image" }));
+    editForm = screen.getByRole("form", { name: "Edit Moment" });
+    fireEvent.click(within(editForm).getByRole("button", { name: "Remove image" }));
+    fireEvent.click(within(editForm).getByRole("button", { name: "Save Changes" }));
+
+    await within(editForm).findByText("Your moment has been updated.");
+    const removalCall = fetchMock.mock.calls.find(
+      ([, init]) =>
+        init?.method === "PATCH" &&
+        init.body instanceof FormData &&
+        init.body.get("imageAction") === "remove",
+    );
+    expect(removalCall).toBeDefined();
+    expect(apiMoments[0]?.image).toBeUndefined();
   });
 
   it("reports an API creation error without adding an unsaved Moment", async () => {
@@ -609,6 +742,7 @@ describe("Mood & Moments homepage", () => {
     fireEvent.click(deleteButton);
     expect(screen.queryByRole("button", { name: "Confirm delete" })).toBeNull();
 
+    await vi.waitFor(() => expect(finishUpdate).toBeTypeOf("function"));
     finishUpdate?.(jsonResponse({ moment: apiMoments[0] }));
     expect(
       await within(editForm).findByText("Your moment has been updated."),

@@ -1,17 +1,22 @@
-import { createMoment } from "@/lib/moment-creation";
+import { prepareMoment } from "@/lib/moment-creation";
 import {
-  createAuthenticatedMomentRepository,
+  createAuthenticatedMomentService,
   errorResponse,
   handleMomentApiError,
+  isMultipartRequest,
   jsonResponse,
+  readFormDataBody,
   readJsonBody,
 } from "@/lib/moment-api-server";
-import { parseCreateMomentRequest } from "@/lib/moment-request-validation";
+import {
+  parseCreateMomentFormData,
+  parseCreateMomentRequest,
+} from "@/lib/moment-request-validation";
 
 export async function GET() {
   try {
-    const repository = await createAuthenticatedMomentRepository();
-    const moments = await repository.list();
+    const service = await createAuthenticatedMomentService();
+    const moments = await service.list();
 
     return jsonResponse({ moments });
   } catch (error) {
@@ -21,32 +26,64 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const repository = await createAuthenticatedMomentRepository();
-    const body = await readJsonBody(request);
+    const service = await createAuthenticatedMomentService();
+    let input;
+    let image: File | null = null;
 
-    if (!body.success) {
-      return errorResponse(
-        400,
-        "INVALID_JSON",
-        "Request body must be valid JSON.",
-      );
+    if (isMultipartRequest(request)) {
+      const body = await readFormDataBody(request);
+
+      if (!body.success) {
+        return errorResponse(
+          400,
+          "INVALID_FORM_DATA",
+          "Request body must be valid multipart form data.",
+        );
+      }
+
+      const validation = await parseCreateMomentFormData(body.data);
+
+      if (!validation.success) {
+        return errorResponse(
+          422,
+          "VALIDATION_ERROR",
+          "Moment details are invalid.",
+          validation.errors,
+        );
+      }
+
+      input = validation.data.input;
+      image = validation.data.image;
+    } else {
+      const body = await readJsonBody(request);
+
+      if (!body.success) {
+        return errorResponse(
+          400,
+          "INVALID_JSON",
+          "Request body must be valid JSON.",
+        );
+      }
+
+      const validation = parseCreateMomentRequest(body.data);
+
+      if (!validation.success) {
+        return errorResponse(
+          422,
+          "VALIDATION_ERROR",
+          "Moment details are invalid.",
+          validation.errors,
+        );
+      }
+
+      input = validation.data;
     }
 
-    const validation = parseCreateMomentRequest(body.data);
-
-    if (!validation.success) {
-      return errorResponse(
-        422,
-        "VALIDATION_ERROR",
-        "Moment details are invalid.",
-        validation.errors,
-      );
-    }
-
-    const moment = await createMoment(repository, {
-      ...validation.data,
+    const candidate = await prepareMoment({
+      ...input,
       image: null,
     });
+    const moment = await service.create(candidate, image);
 
     return jsonResponse({ moment }, 201);
   } catch (error) {

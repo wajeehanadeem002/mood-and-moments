@@ -1,4 +1,5 @@
 import type { MoodId } from "@/data/moments";
+import { validateMomentImageFile } from "@/lib/moment-image-validation";
 
 export type MomentRequestInput = {
   title: string;
@@ -8,7 +9,7 @@ export type MomentRequestInput = {
 };
 
 export type MomentRequestErrors = Partial<
-  Record<keyof MomentRequestInput | "request", string>
+  Record<keyof MomentRequestInput | "image" | "request", string>
 >;
 
 export type MomentRequestValidationResult<T> =
@@ -21,6 +22,21 @@ const allowedFields = new Set<keyof MomentRequestInput>([
   "mood",
   "date",
 ]);
+
+export type CreateMomentFormInput = {
+  input: MomentRequestInput;
+  image: File | null;
+};
+
+export type MomentImageMutation =
+  | { kind: "keep" }
+  | { kind: "remove" }
+  | { kind: "replace"; image: File };
+
+export type UpdateMomentFormInput = {
+  input: Partial<MomentRequestInput>;
+  imageMutation: MomentImageMutation;
+};
 
 const allowedMoods = new Set<MoodId>([
   "happy",
@@ -163,4 +179,148 @@ export function parseUpdateMomentRequest(
   }
 
   return validateFields(value, fields);
+}
+
+function formDataObject(
+  formData: FormData,
+  allowed: ReadonlySet<string>,
+): MomentRequestValidationResult<Record<string, FormDataEntryValue>> {
+  const data: Record<string, FormDataEntryValue> = {};
+
+  for (const [field, value] of formData.entries()) {
+    if (!allowed.has(field) || Object.hasOwn(data, field)) {
+      return {
+        success: false,
+        errors: {
+          request: "Request body contains unsupported or duplicate fields.",
+        },
+      };
+    }
+
+    data[field] = value;
+  }
+
+  return { success: true, data };
+}
+
+const createFormFields = new Set([...allowedFields, "image"]);
+const updateFormFields = new Set([
+  ...allowedFields,
+  "imageAction",
+  "image",
+]);
+
+function isFileValue(value: FormDataEntryValue): value is File {
+  return (
+    typeof value !== "string" &&
+    typeof value.arrayBuffer === "function" &&
+    typeof value.size === "number" &&
+    typeof value.type === "string"
+  );
+}
+
+export async function parseCreateMomentFormData(
+  formData: FormData,
+): Promise<MomentRequestValidationResult<CreateMomentFormInput>> {
+  const formResult = formDataObject(formData, createFormFields);
+
+  if (!formResult.success) {
+    return formResult;
+  }
+
+  const { image, ...fields } = formResult.data;
+  const inputResult = parseCreateMomentRequest(fields);
+
+  if (!inputResult.success) {
+    return inputResult;
+  }
+
+  if (image !== undefined && !isFileValue(image)) {
+    return {
+      success: false,
+      errors: { image: "Choose a valid JPEG, PNG, or WebP image." },
+    };
+  }
+
+  if (image && isFileValue(image)) {
+    const imageResult = await validateMomentImageFile(image);
+
+    if (!imageResult.success) {
+      return { success: false, errors: { image: imageResult.error } };
+    }
+  }
+
+  return {
+    success: true,
+    data: { input: inputResult.data, image: image ?? null },
+  };
+}
+
+export async function parseUpdateMomentFormData(
+  formData: FormData,
+): Promise<MomentRequestValidationResult<UpdateMomentFormInput>> {
+  const formResult = formDataObject(formData, updateFormFields);
+
+  if (!formResult.success) {
+    return formResult;
+  }
+
+  const { imageAction, image, ...fields } = formResult.data;
+
+  if (
+    imageAction !== undefined &&
+    imageAction !== "replace" &&
+    imageAction !== "remove" &&
+    imageAction !== "keep"
+  ) {
+    return {
+      success: false,
+      errors: { request: "Choose a supported image action." },
+    };
+  }
+
+  const normalizedAction = imageAction ?? (image ? "replace" : "keep");
+
+  if (normalizedAction === "replace") {
+    if (!image || !isFileValue(image)) {
+      return {
+        success: false,
+        errors: { image: "Choose a valid JPEG, PNG, or WebP image." },
+      };
+    }
+
+    const imageResult = await validateMomentImageFile(image);
+
+    if (!imageResult.success) {
+      return { success: false, errors: { image: imageResult.error } };
+    }
+  } else if (image !== undefined) {
+    return {
+      success: false,
+      errors: { request: "The image does not match the requested action." },
+    };
+  }
+
+  let input: Partial<MomentRequestInput> = {};
+  if (Object.keys(fields).length > 0) {
+    const inputResult = parseUpdateMomentRequest(fields);
+
+    if (!inputResult.success) {
+      return inputResult;
+    }
+
+    input = inputResult.data;
+  } else if (normalizedAction === "keep") {
+    return {
+      success: false,
+      errors: { request: "Provide at least one Moment field to update." },
+    };
+  }
+
+  const imageMutation: MomentImageMutation =
+    normalizedAction === "replace"
+      ? { kind: "replace", image: image as File }
+      : { kind: normalizedAction };
+
+  return { success: true, data: { input, imageMutation } };
 }

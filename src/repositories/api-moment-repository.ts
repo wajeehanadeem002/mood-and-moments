@@ -94,14 +94,63 @@ function requestBody(moment: Moment) {
   };
 }
 
-function assertImagesAreDeferred(moment: Moment) {
-  if (moment.image) {
+function imageFileFromDataUrl(source: string): File {
+  const match = source.match(
+    /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]*={0,2})$/,
+  );
+
+  if (!match) {
     throw new ApiMomentRepositoryError(
-      "Moment images are not available in cloud storage yet.",
+      "Moment image source is not trusted.",
       undefined,
-      "IMAGE_STORAGE_UNAVAILABLE",
+      "INVALID_IMAGE_SOURCE",
     );
   }
+
+  try {
+    const type = match[1]!;
+    const binary = atob(match[2]!);
+    const bytes = Uint8Array.from(binary, (character) =>
+      character.charCodeAt(0),
+    );
+
+    return new File([bytes], "moment-image", { type });
+  } catch (cause) {
+    throw new ApiMomentRepositoryError(
+      "Moment image source is not trusted.",
+      undefined,
+      "INVALID_IMAGE_SOURCE",
+      undefined,
+      { cause },
+    );
+  }
+}
+
+function multipartBody(moment: Moment, imageAction?: "remove" | "replace") {
+  const formData = new FormData();
+  const fields = requestBody(moment);
+
+  formData.set("title", fields.title);
+  formData.set("description", fields.description);
+  formData.set("mood", fields.mood);
+  formData.set("date", fields.date);
+
+  if (imageAction) {
+    formData.set("imageAction", imageAction);
+  }
+
+  if (moment.image?.src.startsWith("data:")) {
+    formData.set("image", imageFileFromDataUrl(moment.image.src));
+  }
+
+  return formData;
+}
+
+function isPrivateImageProxy(moment: Moment) {
+  return (
+    moment.image?.src ===
+    `/api/moments/${encodeURIComponent(moment.id)}/image`
+  );
 }
 
 export class ApiMomentRepository implements MomentRepository {
@@ -171,18 +220,52 @@ export class ApiMomentRepository implements MomentRepository {
   }
 
   async create(moment: Moment): Promise<Moment> {
-    assertImagesAreDeferred(moment);
+    if (!moment.image) {
+      return this.writeJsonMoment("/api/moments", "POST", moment);
+    }
 
-    return this.writeMoment("/api/moments", "POST", moment);
+    if (!moment.image.src.startsWith("data:")) {
+      throw new ApiMomentRepositoryError(
+        "Moment image source is not trusted.",
+        undefined,
+        "INVALID_IMAGE_SOURCE",
+      );
+    }
+
+    return this.writeMultipartMoment(
+      "/api/moments",
+      "POST",
+      multipartBody(moment),
+    );
   }
 
   async update(moment: Moment): Promise<Moment> {
-    assertImagesAreDeferred(moment);
+    const endpoint = `/api/moments/${encodeURIComponent(moment.id)}`;
 
-    return this.writeMoment(
-      `/api/moments/${encodeURIComponent(moment.id)}`,
-      "PATCH",
-      moment,
+    if (!moment.image) {
+      return this.writeMultipartMoment(
+        endpoint,
+        "PATCH",
+        multipartBody(moment, "remove"),
+      );
+    }
+
+    if (moment.image.src.startsWith("data:")) {
+      return this.writeMultipartMoment(
+        endpoint,
+        "PATCH",
+        multipartBody(moment, "replace"),
+      );
+    }
+
+    if (isPrivateImageProxy(moment)) {
+      return this.writeJsonMoment(endpoint, "PATCH", moment);
+    }
+
+    throw new ApiMomentRepositoryError(
+      "Moment image source is not trusted.",
+      undefined,
+      "INVALID_IMAGE_SOURCE",
     );
   }
 
@@ -193,7 +276,7 @@ export class ApiMomentRepository implements MomentRepository {
     });
   }
 
-  private async writeMoment(
+  private async writeJsonMoment(
     input: string,
     method: "PATCH" | "POST",
     moment: Moment,
@@ -210,6 +293,33 @@ export class ApiMomentRepository implements MomentRepository {
     const savedMoment =
       body && typeof body === "object"
         ? (body as Record<string, unknown>).moment
+        : undefined;
+
+    if (!isMoment(savedMoment)) {
+      throw new ApiMomentRepositoryError(
+        "Moment service returned an invalid response.",
+        response.status,
+        "INVALID_RESPONSE",
+      );
+    }
+
+    return savedMoment;
+  }
+
+  private async writeMultipartMoment(
+    input: string,
+    method: "PATCH" | "POST",
+    body: FormData,
+  ): Promise<Moment> {
+    const response = await this.request(input, {
+      body,
+      headers: { Accept: "application/json" },
+      method,
+    });
+    const responseBody = await readResponseJson(response);
+    const savedMoment =
+      responseBody && typeof responseBody === "object"
+        ? (responseBody as Record<string, unknown>).moment
         : undefined;
 
     if (!isMoment(savedMoment)) {

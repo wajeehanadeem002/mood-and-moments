@@ -48,7 +48,7 @@ pnpm exec supabase start
 pnpm test:db
 ```
 
-The current milestone provides the schema, RLS tests, and authenticated server client only. The existing Moment UI still uses browser localStorage until the next approved milestone.
+Authenticated Moment CRUD now uses server-mediated Route Handlers, the RLS-backed Supabase PostgreSQL repository, and private Supabase Storage image lifecycle through an authenticated same-origin image proxy. Existing browser-local Moments remain untouched; localStorage import or migration is intentionally deferred to a later approved milestone.
 
 ## Learn More
 

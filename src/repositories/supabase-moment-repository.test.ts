@@ -50,6 +50,28 @@ describe("SupabaseMomentRepository", () => {
     });
   });
 
+  it("maps a private image reference to the authenticated image proxy", async () => {
+    const imageRow = {
+      ...row,
+      image_path: `${row.owner_id}/${row.id}/image`,
+    };
+    const { client } = createSupabaseClientDouble({
+      data: [imageRow],
+      error: null,
+    });
+    const repository = new SupabaseMomentRepository(client);
+
+    await expect(repository.list()).resolves.toEqual([
+      {
+        ...moment,
+        image: {
+          src: `/api/moments/${row.id}/image`,
+          alt: "A quiet morning moment image.",
+        },
+      },
+    ]);
+  });
+
   it("creates a Moment without caller-controlled identity, id, or image data", async () => {
     const { client, queries } = createSupabaseClientDouble({
       data: row,
@@ -118,6 +140,46 @@ describe("SupabaseMomentRepository", () => {
     await expect(repository.findById(row.id)).resolves.toBeNull();
     const query = queries[0]!;
     expect(query.eq).toHaveBeenCalledWith("id", row.id);
+  });
+
+  it("returns the server-only image path with an owner-scoped record", async () => {
+    const imagePath = `${row.owner_id}/${row.id}/image`;
+    const { client } = createSupabaseClientDouble({
+      data: { ...row, image_path: imagePath },
+      error: null,
+    });
+    const repository = new SupabaseMomentRepository(client);
+
+    await expect(repository.findRecordById(row.id)).resolves.toEqual({
+      moment: {
+        ...moment,
+        image: {
+          src: `/api/moments/${row.id}/image`,
+          alt: "A quiet morning moment image.",
+        },
+      },
+      imagePath,
+    });
+  });
+
+  it("updates the image reference together with editable fields", async () => {
+    const imagePath = `${row.owner_id}/${row.id}/image`;
+    const { client, queries } = createSupabaseClientDouble({
+      data: { ...row, image_path: imagePath },
+      error: null,
+    });
+    const repository = new SupabaseMomentRepository(client);
+
+    await repository.updateWithImagePath(moment, imagePath);
+
+    expect(queries[0]!.update).toHaveBeenCalledWith({
+      title: moment.title,
+      description: moment.excerpt,
+      mood: moment.mood,
+      moment_date: "2026-08-29",
+      image_path: imagePath,
+    });
+    expect(queries[0]!.eq).toHaveBeenCalledWith("id", row.id);
   });
 
   it("reports a missing or RLS-hidden update as not found", async () => {

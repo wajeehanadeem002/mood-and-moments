@@ -1,13 +1,19 @@
-import { updateMoment } from "@/lib/moment-creation";
+import { prepareUpdatedMoment } from "@/lib/moment-creation";
 import {
-  createAuthenticatedMomentRepository,
+  createAuthenticatedMomentService,
   errorResponse,
   handleMomentApiError,
+  isMultipartRequest,
   isValidMomentId,
   jsonResponse,
+  readFormDataBody,
   readJsonBody,
 } from "@/lib/moment-api-server";
-import { parseUpdateMomentRequest } from "@/lib/moment-request-validation";
+import {
+  type MomentImageMutation,
+  parseUpdateMomentFormData,
+  parseUpdateMomentRequest,
+} from "@/lib/moment-request-validation";
 
 type MomentRouteContext = {
   params: Promise<{ id: string }>;
@@ -15,47 +21,81 @@ type MomentRouteContext = {
 
 export async function PATCH(request: Request, context: MomentRouteContext) {
   try {
-    const repository = await createAuthenticatedMomentRepository();
+    const service = await createAuthenticatedMomentService();
     const { id } = await context.params;
 
     if (!isValidMomentId(id)) {
       return errorResponse(400, "INVALID_ID", "Moment id is invalid.");
     }
 
-    const body = await readJsonBody(request);
+    let input;
+    let imageMutation: MomentImageMutation = { kind: "keep" };
 
-    if (!body.success) {
-      return errorResponse(
-        400,
-        "INVALID_JSON",
-        "Request body must be valid JSON.",
-      );
+    if (isMultipartRequest(request)) {
+      const body = await readFormDataBody(request);
+
+      if (!body.success) {
+        return errorResponse(
+          400,
+          "INVALID_FORM_DATA",
+          "Request body must be valid multipart form data.",
+        );
+      }
+
+      const validation = await parseUpdateMomentFormData(body.data);
+
+      if (!validation.success) {
+        return errorResponse(
+          422,
+          "VALIDATION_ERROR",
+          "Moment details are invalid.",
+          validation.errors,
+        );
+      }
+
+      input = validation.data.input;
+      imageMutation = validation.data.imageMutation;
+    } else {
+      const body = await readJsonBody(request);
+
+      if (!body.success) {
+        return errorResponse(
+          400,
+          "INVALID_JSON",
+          "Request body must be valid JSON.",
+        );
+      }
+
+      const validation = parseUpdateMomentRequest(body.data);
+
+      if (!validation.success) {
+        return errorResponse(
+          422,
+          "VALIDATION_ERROR",
+          "Moment details are invalid.",
+          validation.errors,
+        );
+      }
+
+      input = validation.data;
     }
 
-    const validation = parseUpdateMomentRequest(body.data);
+    const record = await service.findRecordById(id);
 
-    if (!validation.success) {
-      return errorResponse(
-        422,
-        "VALIDATION_ERROR",
-        "Moment details are invalid.",
-        validation.errors,
-      );
-    }
-
-    const existingMoment = await repository.findById(id);
-
-    if (!existingMoment) {
+    if (!record) {
       return errorResponse(404, "NOT_FOUND", "Moment not found.");
     }
 
-    const moment = await updateMoment(repository, existingMoment, {
-      title: validation.data.title ?? existingMoment.title,
-      description: validation.data.description ?? existingMoment.excerpt,
-      mood: validation.data.mood ?? existingMoment.mood,
-      date: validation.data.date ?? existingMoment.dateTime.slice(0, 10),
+    const candidate = await prepareUpdatedMoment(record.moment, {
+      title: input.title ?? record.moment.title,
+      description: input.description ?? record.moment.excerpt,
+      mood: input.mood ?? record.moment.mood,
+      date: input.date ?? record.moment.dateTime.slice(0, 10),
       image: null,
+    }, {
+      removeImage: imageMutation.kind === "remove",
     });
+    const moment = await service.updateRecord(record, candidate, imageMutation);
 
     return jsonResponse({ moment });
   } catch (error) {
@@ -65,14 +105,14 @@ export async function PATCH(request: Request, context: MomentRouteContext) {
 
 export async function DELETE(_request: Request, context: MomentRouteContext) {
   try {
-    const repository = await createAuthenticatedMomentRepository();
+    const service = await createAuthenticatedMomentService();
     const { id } = await context.params;
 
     if (!isValidMomentId(id)) {
       return errorResponse(400, "INVALID_ID", "Moment id is invalid.");
     }
 
-    await repository.delete(id);
+    await service.delete(id);
 
     return new Response(null, {
       status: 204,

@@ -16,6 +16,22 @@ const userMoment: Moment = {
 };
 
 describe("RecentMoments", () => {
+  it("renders authenticated image proxies directly so browser credentials are used", () => {
+    const momentWithPrivateImage: Moment = {
+      ...userMoment,
+      image: {
+        src: "/api/moments/00000000-0000-4000-8000-000000000001/image",
+        alt: "A quiet morning moment image.",
+      },
+    };
+
+    render(<RecentMoments moments={[momentWithPrivateImage]} />);
+
+    expect(screen.getByRole("img").getAttribute("src")).toBe(
+      momentWithPrivateImage.image?.src,
+    );
+  });
+
   it("keeps static example Moments completely read-only", () => {
     render(
       <RecentMoments

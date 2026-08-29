@@ -38,6 +38,45 @@ function authenticateWith(client: object) {
   });
 }
 
+function addStorage(client: object, imageType = "image/png") {
+  const bucket = {
+    download: vi.fn().mockResolvedValue({
+      data: new Blob(["old image"], { type: imageType }),
+      error: null,
+    }),
+    remove: vi.fn().mockResolvedValue({ data: [], error: null }),
+    update: vi.fn().mockResolvedValue({ data: {}, error: null }),
+    upload: vi.fn().mockResolvedValue({ data: {}, error: null }),
+  };
+  const from = vi.fn().mockReturnValue(bucket);
+  Object.assign(client, { storage: { from } });
+
+  return { bucket };
+}
+
+function validWebp() {
+  return new File(
+    [
+      new Uint8Array([
+        0x52, 0x49, 0x46, 0x46, 0x04, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42,
+        0x50,
+      ]),
+    ],
+    "replacement.webp",
+    { type: "image/webp" },
+  );
+}
+
+function multipartRequest(formData: FormData) {
+  const request = new Request(`http://localhost/api/moments/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "multipart/form-data; boundary=test" },
+  });
+  vi.spyOn(request, "formData").mockResolvedValue(formData);
+
+  return request;
+}
+
 describe("/api/moments/[id]", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -78,6 +117,63 @@ describe("/api/moments/[id]", () => {
       mood: "loved",
       moment_date: "2026-08-29",
     });
+  });
+
+  it("replaces an owned private image at the stable path", async () => {
+    const imagePath = `user_a/${id}/image`;
+    const imageRow = { ...row, image_path: imagePath };
+    const updatedRow = { ...imageRow, title: "A softer morning" };
+    const { client, queries } = createSupabaseClientDouble(
+      { data: imageRow, error: null },
+      { data: updatedRow, error: null },
+      { data: updatedRow, error: null },
+    );
+    const { bucket } = addStorage(client);
+    authenticateWith(client);
+    const formData = new FormData();
+    formData.set("title", "A softer morning");
+    formData.set("imageAction", "replace");
+    formData.set("image", validWebp());
+
+    const response = await PATCH(
+      multipartRequest(formData),
+      context(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(bucket.update).toHaveBeenCalledWith(
+      imagePath,
+      expect.any(File),
+      expect.objectContaining({ contentType: "image/webp", upsert: false }),
+    );
+    expect(queries[2]!.update).toHaveBeenCalledWith(
+      expect.objectContaining({ image_path: imagePath }),
+    );
+  });
+
+  it("removes an owned private image and clears the database reference", async () => {
+    const imagePath = `user_a/${id}/image`;
+    const imageRow = { ...row, image_path: imagePath };
+    const { client, queries } = createSupabaseClientDouble(
+      { data: imageRow, error: null },
+      { data: imageRow, error: null },
+      { data: { ...row, image_path: null }, error: null },
+    );
+    const { bucket } = addStorage(client);
+    authenticateWith(client);
+    const formData = new FormData();
+    formData.set("imageAction", "remove");
+
+    const response = await PATCH(
+      multipartRequest(formData),
+      context(),
+    );
+
+    expect(response.status).toBe(200);
+    expect(bucket.remove).toHaveBeenCalledWith([imagePath]);
+    expect(queries[2]!.update).toHaveBeenCalledWith(
+      expect.objectContaining({ image_path: null }),
+    );
   });
 
   it("returns the same 404 for a missing or RLS-hidden Moment", async () => {
@@ -129,10 +225,10 @@ describe("/api/moments/[id]", () => {
   });
 
   it("deletes an owned Moment without returning a body", async () => {
-    const { client, queries } = createSupabaseClientDouble({
-      data: { id },
-      error: null,
-    });
+    const { client, queries } = createSupabaseClientDouble(
+      { data: row, error: null },
+      { data: { id }, error: null },
+    );
     authenticateWith(client);
     const request = new Request(`http://localhost/api/moments/${id}`, {
       method: "DELETE",
@@ -143,7 +239,7 @@ describe("/api/moments/[id]", () => {
     expect(response.status).toBe(204);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(await response.text()).toBe("");
-    expect(queries[0]?.eq).toHaveBeenCalledWith("id", id);
+    expect(queries[1]?.eq).toHaveBeenCalledWith("id", id);
   });
 
   it("returns 404 when RLS prevents deleting the requested Moment", async () => {

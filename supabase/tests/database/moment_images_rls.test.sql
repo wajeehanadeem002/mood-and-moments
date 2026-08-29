@@ -9,7 +9,7 @@ create temporary table tap_results (
 
 grant insert on table tap_results to anon, authenticated;
 
-select plan(5);
+select plan(8);
 
 insert into tap_results (test_number, result)
 select 1, results_eq(
@@ -75,6 +75,46 @@ select 5, results_eq(
       ('user_a/moment-c/image-c.png'::text)
   $$,
   'user A can read only objects in their own folder'
+);
+
+insert into tap_results (test_number, result)
+select 6, lives_ok(
+  $$
+    update storage.objects
+    set name = 'user_a/moment-a/image'
+    where bucket_id = 'moment-images'
+      and name = 'user_a/moment-a/image-a.webp'
+  $$,
+  'user A can replace an object while keeping it inside their own folder'
+);
+
+insert into tap_results (test_number, result)
+select 7, results_eq(
+  $$
+    with updated as (
+      update storage.objects
+      set name = 'user_b/moment-b/compromised.webp'
+      where bucket_id = 'moment-images'
+        and name = 'user_b/moment-b/image-b.webp'
+      returning id
+    )
+    select count(*)::bigint from updated
+  $$,
+  $$values (0::bigint)$$,
+  'user A cannot update user B objects'
+);
+
+insert into tap_results (test_number, result)
+select 8, throws_ok(
+  $$
+    update storage.objects
+    set name = 'user_b/moment-a/image'
+    where bucket_id = 'moment-images'
+      and name = 'user_a/moment-a/image'
+  $$,
+  '42501',
+  'new row violates row-level security policy for table "objects"',
+  'the update WITH CHECK prevents moving an owned object into user B folder'
 );
 
 reset role;

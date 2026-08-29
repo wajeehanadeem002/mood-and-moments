@@ -17,6 +17,22 @@ const savedMoment: Moment = {
   excerpt: "The room felt peaceful before the day began.",
 };
 
+const savedMomentWithImage: Moment = {
+  ...savedMoment,
+  image: {
+    src: `/api/moments/${savedMoment.id}/image`,
+    alt: "A quiet beginning moment image.",
+  },
+};
+
+const dataImageMoment: Moment = {
+  ...savedMoment,
+  image: {
+    src: "data:image/png;base64,iVBORw0KGgo=",
+    alt: "A quiet beginning moment image.",
+  },
+};
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -68,15 +84,42 @@ describe("ApiMomentRepository", () => {
     });
   });
 
-  it("updates and deletes through the owner-scoped API endpoints", async () => {
+  it("creates an image Moment with multipart data and no client-owned path", async () => {
+    const { fetcher, repository } = createRepository(
+      jsonResponse({ moment: savedMomentWithImage }, 201),
+    );
+
+    await expect(repository.create(dataImageMoment)).resolves.toEqual(
+      savedMomentWithImage,
+    );
+
+    const [url, init] = fetcher.mock.calls[0]!;
+    expect(url).toBe("/api/moments");
+    expect(init).toEqual(
+      expect.objectContaining({
+        headers: { Accept: "application/json" },
+        method: "POST",
+      }),
+    );
+    expect(init.body).toBeInstanceOf(FormData);
+    const formData = init.body as FormData;
+    expect(formData.get("title")).toBe(savedMoment.title);
+    expect(formData.get("owner_id")).toBeNull();
+    expect(formData.get("image_path")).toBeNull();
+    expect(formData.get("image")).toEqual(
+      expect.objectContaining({ size: 8, type: "image/png" }),
+    );
+  });
+
+  it("keeps an existing private image while updating editable fields", async () => {
     const fetcher = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ moment: savedMoment }))
-      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+      .mockResolvedValueOnce(jsonResponse({ moment: savedMomentWithImage }));
     const repository = new ApiMomentRepository(fetcher as typeof fetch);
 
-    await expect(repository.update(savedMoment)).resolves.toEqual(savedMoment);
-    await expect(repository.delete(savedMoment.id)).resolves.toBeUndefined();
+    await expect(repository.update(savedMomentWithImage)).resolves.toEqual(
+      savedMomentWithImage,
+    );
 
     expect(fetcher).toHaveBeenNthCalledWith(
       1,
@@ -95,8 +138,38 @@ describe("ApiMomentRepository", () => {
         method: "PATCH",
       },
     );
+  });
+
+  it("uses explicit multipart actions for image replacement and removal", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ moment: savedMomentWithImage }))
+      .mockResolvedValueOnce(jsonResponse({ moment: savedMoment }));
+    const repository = new ApiMomentRepository(fetcher as typeof fetch);
+
+    await repository.update(dataImageMoment);
+    await repository.update(savedMoment);
+
+    const replacement = fetcher.mock.calls[0]![1]!.body as FormData;
+    expect(replacement).toBeInstanceOf(FormData);
+    expect(replacement.get("imageAction")).toBe("replace");
+    expect(replacement.get("image")).toEqual(
+      expect.objectContaining({ type: "image/png" }),
+    );
+    const removal = fetcher.mock.calls[1]![1]!.body as FormData;
+    expect(removal).toBeInstanceOf(FormData);
+    expect(removal.get("imageAction")).toBe("remove");
+    expect(removal.get("image")).toBeNull();
+  });
+
+  it("deletes through the owner-scoped API endpoint", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    const repository = new ApiMomentRepository(fetcher as typeof fetch);
+
+    await expect(repository.delete(savedMoment.id)).resolves.toBeUndefined();
+
     expect(fetcher).toHaveBeenNthCalledWith(
-      2,
+      1,
       `/api/moments/${savedMoment.id}`,
       {
         headers: { Accept: "application/json" },
@@ -151,22 +224,19 @@ describe("ApiMomentRepository", () => {
     );
   });
 
-  it("does not silently discard an image while cloud image storage is deferred", async () => {
+  it("rejects a non-data, non-proxy image source instead of sending a path", async () => {
     const fetcher = vi.fn();
     const repository = new ApiMomentRepository(fetcher as typeof fetch);
     const momentWithImage: Moment = {
       ...savedMoment,
       image: {
-        src: "data:image/png;base64,aW1hZ2U=",
+        src: "https://attacker.example/image.png",
         alt: "A quiet beginning moment image.",
       },
     };
 
-    await expect(repository.create(momentWithImage)).rejects.toThrow(
-      "Moment images are not available in cloud storage yet.",
-    );
     await expect(repository.update(momentWithImage)).rejects.toThrow(
-      "Moment images are not available in cloud storage yet.",
+      "Moment image source is not trusted.",
     );
     expect(fetcher).not.toHaveBeenCalled();
   });

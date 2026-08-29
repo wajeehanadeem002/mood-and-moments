@@ -15,6 +15,11 @@ type MomentRow = {
   updated_at: string;
 };
 
+export type StoredMomentRecord = {
+  moment: Moment;
+  imagePath: string | null;
+};
+
 const momentColumns = [
   "id",
   "owner_id",
@@ -106,7 +111,25 @@ function mapMomentRow(value: unknown): Moment {
     mood: value.mood,
     title: value.title,
     excerpt: value.description,
+    ...(value.image_path
+      ? {
+          image: {
+            src: `/api/moments/${value.id}/image`,
+            alt: `${value.title} moment image.`,
+          },
+        }
+      : {}),
   };
+}
+
+function mapStoredMomentRow(value: unknown): StoredMomentRecord {
+  if (!isMomentRow(value)) {
+    throw new MomentPersistenceError(
+      "Supabase returned an invalid Moment record.",
+    );
+  }
+
+  return { moment: mapMomentRow(value), imagePath: value.image_path };
 }
 
 function throwPersistenceError(operation: string, cause: unknown): never {
@@ -140,6 +163,12 @@ export class SupabaseMomentRepository implements MomentRepository {
   }
 
   async findById(id: string): Promise<Moment | null> {
+    const record = await this.findRecordById(id);
+
+    return record?.moment ?? null;
+  }
+
+  async findRecordById(id: string): Promise<StoredMomentRecord | null> {
     const { data, error } = await this.client
       .from("moments")
       .select(momentColumns)
@@ -150,7 +179,7 @@ export class SupabaseMomentRepository implements MomentRepository {
       throwPersistenceError("load", error);
     }
 
-    return data === null ? null : mapMomentRow(data);
+    return data === null ? null : mapStoredMomentRow(data);
   }
 
   async create(moment: Moment): Promise<Moment> {
@@ -173,6 +202,20 @@ export class SupabaseMomentRepository implements MomentRepository {
   }
 
   async update(moment: Moment): Promise<Moment> {
+    return this.updateRow(moment);
+  }
+
+  async updateWithImagePath(
+    moment: Moment,
+    imagePath: string | null,
+  ): Promise<Moment> {
+    return this.updateRow(moment, imagePath);
+  }
+
+  private async updateRow(
+    moment: Moment,
+    imagePath?: string | null,
+  ): Promise<Moment> {
     const { data, error } = await this.client
       .from("moments")
       .update({
@@ -180,6 +223,7 @@ export class SupabaseMomentRepository implements MomentRepository {
         description: moment.excerpt,
         mood: moment.mood,
         moment_date: moment.dateTime.slice(0, 10),
+        ...(imagePath !== undefined ? { image_path: imagePath } : {}),
       })
       .eq("id", moment.id)
       .select(momentColumns)

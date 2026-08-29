@@ -105,6 +105,13 @@ export async function createMoment(
   draft: MomentDraft,
   options: CreateMomentOptions = {},
 ): Promise<Moment> {
+  return repository.create(await prepareMoment(draft, options));
+}
+
+export async function prepareMoment(
+  draft: MomentDraft,
+  options: CreateMomentOptions = {},
+): Promise<Moment> {
   if (Object.keys(validateMomentDraft(draft)).length > 0) {
     throw new Error("Moment draft is invalid.");
   }
@@ -135,11 +142,21 @@ export async function createMoment(
       : {}),
   };
 
-  return repository.create(moment);
+  return moment;
 }
 
 export async function updateMoment(
   repository: MomentRepository,
+  existingMoment: Moment,
+  draft: MomentDraft,
+  options: UpdateMomentOptions = {},
+): Promise<Moment> {
+  return repository.update(
+    await prepareUpdatedMoment(existingMoment, draft, options),
+  );
+}
+
+export async function prepareUpdatedMoment(
   existingMoment: Moment,
   draft: MomentDraft,
   options: UpdateMomentOptions = {},
@@ -173,5 +190,5 @@ export async function updateMoment(
       : {}),
   };
 
-  return repository.update(moment);
+  return moment;
 }
