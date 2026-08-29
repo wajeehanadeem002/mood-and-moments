@@ -172,7 +172,7 @@ describe("RecentMoments", () => {
 
     expect(
       await screen.findByText(
-        "We couldn’t delete this moment. Check browser storage and try again.",
+        "We couldn’t delete this moment. Please try again.",
       ),
     ).not.toBeNull();
     expect(screen.getByText("A quiet morning")).not.toBeNull();

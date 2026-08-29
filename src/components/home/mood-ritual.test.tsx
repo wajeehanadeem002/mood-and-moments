@@ -91,10 +91,10 @@ describe("MoodRitual", () => {
     ).toBe(false);
   });
 
-  it("explains the browser-local persistence scope", () => {
+  it("explains the account persistence scope", () => {
     renderRitual();
     expect(
-      screen.getByText("Your moments are saved in this browser."),
+      screen.getByText("Your moments are saved to your account."),
     ).not.toBeNull();
   });
 
@@ -351,7 +351,7 @@ describe("MoodRitual", () => {
     ).not.toBeNull();
   });
 
-  it("announces an edit-specific storage error without losing the draft", async () => {
+  it("announces an edit-specific persistence error without losing the draft", async () => {
     render(
       <MoodRitual
         isHydrating={false}
@@ -372,7 +372,7 @@ describe("MoodRitual", () => {
 
     expect(
       await screen.findByText(
-        "We couldn’t update this moment. Check browser storage and try again.",
+        "We couldn’t update this moment. Please try again.",
       ),
     ).not.toBeNull();
     expect((screen.getByLabelText("Moment title") as HTMLInputElement).value).toBe(

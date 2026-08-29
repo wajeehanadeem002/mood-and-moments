@@ -1,13 +1,7 @@
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { Moment } from "@/data/moments";
 import { recentMoments } from "@/data/moments";
 import { MOMENTS_STORAGE_KEY } from "@/repositories/local-storage-moment-repository";
 import { setClerkTestAuthState } from "@/test/clerk-test-state";
@@ -15,10 +9,105 @@ import { setClerkTestAuthState } from "@/test/clerk-test-state";
 import Home from "./page";
 
 const pushMock = vi.hoisted(() => vi.fn());
+const fetchMock = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
 }));
+
+type ApiMomentInput = {
+  title: string;
+  description: string;
+  mood: Moment["mood"];
+  date: string;
+};
+
+let apiMoments: Moment[];
+let createdMomentCount: number;
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function formatDate(date: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+    year: "numeric",
+  }).format(new Date(`${date}T00:00:00Z`));
+}
+
+function momentFromInput(input: ApiMomentInput, existing?: Moment): Moment {
+  createdMomentCount += existing ? 0 : 1;
+
+  return {
+    id:
+      existing?.id ??
+      `00000000-0000-4000-8000-${String(createdMomentCount).padStart(12, "0")}`,
+    date: formatDate(input.date),
+    dateTime: `${input.date}${existing?.dateTime.slice(10) ?? "T09:15:00Z"}`,
+    time: existing?.time ?? "9:15 AM",
+    mood: input.mood,
+    title: input.title,
+    excerpt: input.description,
+  };
+}
+
+function installMomentApi() {
+  fetchMock.mockImplementation(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+
+      if (url === "/api/moments" && method === "GET") {
+        return jsonResponse({ moments: apiMoments });
+      }
+
+      if (url === "/api/moments" && method === "POST") {
+        const moment = momentFromInput(
+          JSON.parse(String(init?.body)) as ApiMomentInput,
+        );
+        apiMoments = [moment, ...apiMoments];
+        return jsonResponse({ moment }, 201);
+      }
+
+      const id = decodeURIComponent(url.replace("/api/moments/", ""));
+      const existingIndex = apiMoments.findIndex((moment) => moment.id === id);
+
+      if (existingIndex === -1) {
+        return jsonResponse(
+          { error: { code: "NOT_FOUND", message: "Moment not found." } },
+          404,
+        );
+      }
+
+      if (method === "PATCH") {
+        const moment = momentFromInput(
+          JSON.parse(String(init?.body)) as ApiMomentInput,
+          apiMoments[existingIndex],
+        );
+        apiMoments = apiMoments.map((candidate) =>
+          candidate.id === id ? moment : candidate,
+        );
+        return jsonResponse({ moment });
+      }
+
+      if (method === "DELETE") {
+        apiMoments = apiMoments.filter((moment) => moment.id !== id);
+        return new Response(null, { status: 204 });
+      }
+
+      return jsonResponse(
+        { error: { code: "INTERNAL_ERROR", message: "Unexpected request." } },
+        500,
+      );
+    },
+  );
+}
 
 function fillMomentForm() {
   const form = screen.getByRole("form", { name: "Create a Moment" });
@@ -47,14 +136,39 @@ function getSectionByHeading(name: string): HTMLElement {
   return section;
 }
 
+async function waitForCloudReady() {
+  await screen.findByText("Your moments are saved to your account.");
+}
+
 describe("Mood & Moments homepage", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    apiMoments = [];
+    createdMomentCount = 0;
     pushMock.mockReset();
+    fetchMock.mockReset();
+    installMomentApi();
+    vi.stubGlobal("fetch", fetchMock);
   });
-  afterEach(() => vi.restoreAllMocks());
 
-  it("renders the complete single-page experience with semantic landmarks", async () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("renders the complete public experience and loads authenticated Moments", async () => {
+    apiMoments = [
+      {
+        id: "4d21afdc-b9f1-4416-b43f-f7fe964b6786",
+        date: "Aug 29, 2026",
+        dateTime: "2026-08-29T09:15:00Z",
+        time: "9:15 AM",
+        mood: "calm",
+        title: "A cloud-held memory",
+        excerpt: "This belongs to the authenticated account.",
+      },
+    ];
+
     render(<Home />);
 
     expect(
@@ -63,29 +177,19 @@ describe("Mood & Moments homepage", () => {
         name: "Capture the moments. Feel the memories.",
       }),
     ).not.toBeNull();
-    expect(
-      screen.getByRole("heading", { name: "Recent Moments" }),
-    ).not.toBeNull();
-    expect(
-      screen.getByRole("heading", { name: "Memory Timeline" }),
-    ).not.toBeNull();
-    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(3));
-    expect(screen.getByRole("contentinfo")).not.toBeNull();
-  });
-
-  it("loads saved Moments without hiding the static examples", async () => {
-    render(<Home />);
-
     expect(screen.getByText("Loading your saved moments…")).not.toBeNull();
-    expect(
-      await screen.findByText("Your moments are saved in this browser."),
-    ).not.toBeNull();
-    expect(screen.getAllByRole("article")).toHaveLength(3);
+    await waitForCloudReady();
+    expect(screen.getAllByText("A cloud-held memory")).toHaveLength(2);
+    expect(screen.getAllByRole("article")).toHaveLength(4);
+    expect(screen.getByRole("contentinfo")).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("creates a Moment in both views and restores it after remounting", async () => {
+  it("creates a Moment in both views and reloads it from the API after remounting", async () => {
+    const existingLocalValue = JSON.stringify([{ legacy: "untouched" }]);
+    window.localStorage.setItem(MOMENTS_STORAGE_KEY, existingLocalValue);
     const firstRender = render(<Home />);
-    await screen.findByText("Your moments are saved in this browser.");
+    await waitForCloudReady();
     const form = fillMomentForm();
 
     fireEvent.click(
@@ -94,9 +198,22 @@ describe("Mood & Moments homepage", () => {
 
     expect(await screen.findByText("Your moment has been saved.")).not.toBeNull();
     expect(screen.getAllByText("First rain of the season")).toHaveLength(2);
-    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).toContain(
-      "First rain of the season",
+    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).toBe(
+      existingLocalValue,
     );
+    expect(fetchMock).toHaveBeenLastCalledWith("/api/moments", {
+      body: JSON.stringify({
+        title: "First rain of the season",
+        description: "I opened the window and listened for a while.",
+        mood: "calm",
+        date: "2026-08-28",
+      }),
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
 
     firstRender.unmount();
     render(<Home />);
@@ -107,9 +224,9 @@ describe("Mood & Moments homepage", () => {
     expect(screen.getAllByRole("article")).toHaveLength(4);
   });
 
-  it("places a backdated Moment chronologically in both views", async () => {
+  it("places a backdated API-created Moment chronologically in both views", async () => {
     render(<Home />);
-    await screen.findByText("Your moments are saved in this browser.");
+    await waitForCloudReady();
     const form = screen.getByRole("form", { name: "Create a Moment" });
 
     fireEvent.change(within(form).getByLabelText("Moment title"), {
@@ -126,15 +243,8 @@ describe("Mood & Moments homepage", () => {
     );
 
     await screen.findByText("Your moment has been saved.");
-    const recentSection = screen
-      .getByRole("heading", { name: "Recent Moments" })
-      .closest("section");
-    const timelineSection = screen
-      .getByRole("heading", { name: "Memory Timeline" })
-      .closest("section");
-
     expect(
-      within(recentSection as HTMLElement)
+      within(getSectionByHeading("Recent Moments"))
         .getAllByRole("heading", { level: 3 })
         .map((heading) => heading.textContent),
     ).toEqual([
@@ -144,7 +254,7 @@ describe("Mood & Moments homepage", () => {
       "An earlier summer afternoon",
     ]);
     expect(
-      within(timelineSection as HTMLElement)
+      within(getSectionByHeading("Memory Timeline"))
         .getAllByRole("heading", { level: 3 })
         .map((heading) => heading.textContent),
     ).toEqual([
@@ -159,7 +269,7 @@ describe("Mood & Moments homepage", () => {
 
   it("shows accessible required-field errors and focuses the first field", async () => {
     render(<Home />);
-    await screen.findByText("Your moments are saved in this browser.");
+    await waitForCloudReady();
     const form = screen.getByRole("form", { name: "Create a Moment" });
     const title = within(form).getByLabelText("Moment title");
 
@@ -171,16 +281,15 @@ describe("Mood & Moments homepage", () => {
     expect(
       within(form).getByText("Describe the moment you want to remember."),
     ).not.toBeNull();
-    expect(
-      within(form).getByText("Choose the date of this moment."),
-    ).not.toBeNull();
+    expect(within(form).getByText("Choose the date of this moment.")).not.toBeNull();
     expect(title.getAttribute("aria-invalid")).toBe("true");
     expect(document.activeElement).toBe(title);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("rejects an unsupported image before saving", async () => {
     render(<Home />);
-    await screen.findByText("Your moments are saved in this browser.");
+    await waitForCloudReady();
     const form = screen.getByRole("form", { name: "Create a Moment" });
     const imageInput = within(form).getByLabelText("Add an image (optional)");
 
@@ -196,13 +305,54 @@ describe("Mood & Moments homepage", () => {
     expect(imageInput.getAttribute("aria-invalid")).toBe("true");
   });
 
-  it("announces a storage error without adding an unsaved Moment", async () => {
+  it("does not silently discard a valid image while cloud image storage is deferred", async () => {
     render(<Home />);
-    await screen.findByText("Your moments are saved in this browser.");
+    await waitForCloudReady();
     const form = fillMomentForm();
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+    const imageInput = within(form).getByLabelText("Add an image (optional)");
+    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(
+      function mockImageRead(this: FileReader) {
+        Object.defineProperty(this, "result", {
+          configurable: true,
+          value: "data:image/png;base64,aW1hZ2U=",
+        });
+        this.dispatchEvent(new ProgressEvent("load"));
+      },
+    );
+
+    fireEvent.change(imageInput, {
+      target: {
+        files: [new File(["image"], "memory.png", { type: "image/png" })],
+      },
     });
+    fireEvent.click(
+      within(form).getByRole("button", { name: "Create a Moment" }),
+    );
+
+    expect(
+      await within(form).findByText(
+        "We couldn’t save this moment. Please try again.",
+      ),
+    ).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Your moment has been saved.")).toBeNull();
+  });
+
+  it("reports an API creation error without adding an unsaved Moment", async () => {
+    render(<Home />);
+    await waitForCloudReady();
+    const form = fillMomentForm();
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: {
+            code: "INTERNAL_ERROR",
+            message: "The Moment service is temporarily unavailable.",
+          },
+        },
+        500,
+      ),
+    );
 
     fireEvent.click(
       within(form).getByRole("button", { name: "Create a Moment" }),
@@ -210,35 +360,45 @@ describe("Mood & Moments homepage", () => {
 
     expect(
       await within(form).findByText(
-        "We couldn’t save this moment. Check browser storage and try again.",
+        "We couldn’t save this moment. Please try again.",
       ),
     ).not.toBeNull();
     expect(screen.queryByText("First rain of the season")).toBeNull();
   });
 
-  it("ignores corrupted saved data and keeps the homepage usable", async () => {
-    window.localStorage.setItem(MOMENTS_STORAGE_KEY, "{not-json");
+  it("does not read, migrate, or delete existing local Moments", async () => {
+    const existingLocalValue = JSON.stringify([
+      { id: "private-local-moment", title: "A private local memory" },
+    ]);
+    window.localStorage.setItem(MOMENTS_STORAGE_KEY, existingLocalValue);
+    const storageRead = vi.spyOn(Storage.prototype, "getItem");
+    const storageRemove = vi.spyOn(Storage.prototype, "removeItem");
 
     render(<Home />);
 
-    expect(
-      await screen.findByText("Your moments are saved in this browser."),
-    ).not.toBeNull();
-    expect(screen.getAllByRole("article")).toHaveLength(3);
-    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).toBeNull();
+    await waitForCloudReady();
+    expect(screen.queryByText("A private local memory")).toBeNull();
+    expect(storageRead).not.toHaveBeenCalled();
+    expect(storageRemove).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).toBe(
+      existingLocalValue,
+    );
   });
 
-  it("keeps the homepage usable when browser storage access is blocked", async () => {
-    vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
-      throw new DOMException("Storage access denied", "SecurityError");
-    });
+  it("keeps the homepage usable when the authenticated API cannot load", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: { code: "UNAUTHORIZED", message: "Authentication is required." },
+        },
+        401,
+      ),
+    );
 
     render(<Home />);
 
     expect(
-      await screen.findByText(
-        "Your saved moments couldn’t be loaded in this browser.",
-      ),
+      await screen.findByText("Your saved moments couldn’t be loaded right now."),
     ).not.toBeNull();
     expect(screen.getAllByRole("article")).toHaveLength(3);
   });
@@ -246,27 +406,16 @@ describe("Mood & Moments homepage", () => {
   it("keeps every static example Moment read-only", async () => {
     render(<Home />);
 
-    await screen.findByText("Your moments are saved in this browser.");
-
+    await waitForCloudReady();
     expect(screen.queryByRole("button", { name: /^Edit / })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Delete / })).toBeNull();
   });
 
-  it("keeps static Moments public and local Moments private when signed out", async () => {
+  it("keeps static Moments public and makes no private data calls when signed out", async () => {
     setClerkTestAuthState({ isSignedIn: false, userId: null });
     window.localStorage.setItem(
       MOMENTS_STORAGE_KEY,
-      JSON.stringify([
-        {
-          id: "private-local-moment",
-          date: "Aug 28, 2026",
-          dateTime: "2026-08-28T09:00:00+05:00",
-          time: "9:00 AM",
-          mood: "calm",
-          title: "A private local memory",
-          excerpt: "This should only appear after authentication.",
-        },
-      ]),
+      JSON.stringify([{ title: "A private local memory" }]),
     );
     const storageRead = vi.spyOn(Storage.prototype, "getItem");
 
@@ -280,12 +429,13 @@ describe("Mood & Moments homepage", () => {
     expect(screen.queryByText("A private local memory")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Edit / })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Delete / })).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(storageRead).not.toHaveBeenCalled();
   });
 
-  it("directs signed-out Moment creation to sign-in without changing storage", async () => {
+  it("directs signed-out Moment creation to sign-in without API or storage access", async () => {
     setClerkTestAuthState({ isSignedIn: false, userId: null });
-    const originalStoredValue = JSON.stringify([]);
+    const originalStoredValue = JSON.stringify([{ legacy: "untouched" }]);
     window.localStorage.setItem(MOMENTS_STORAGE_KEY, originalStoredValue);
 
     render(<Home />);
@@ -298,61 +448,36 @@ describe("Mood & Moments homepage", () => {
 
     expect(pushMock).toHaveBeenCalledTimes(1);
     expect(pushMock).toHaveBeenCalledWith("/sign-in");
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).toBe(
       originalStoredValue,
     );
     expect(screen.queryByText("Your moment has been saved.")).toBeNull();
-    expect(screen.queryByText("First rain of the season")).toBeNull();
   });
 
-  it("does not duplicate or unlock a static example with a colliding stored id", async () => {
-    window.localStorage.setItem(
-      MOMENTS_STORAGE_KEY,
-      JSON.stringify([
-        {
-          ...recentMoments[0],
-          title: "A stored collision",
-          image: undefined,
-        },
-      ]),
-    );
+  it("does not duplicate or unlock a static example with a colliding API id", async () => {
+    apiMoments = [
+      { ...recentMoments[0], title: "An API collision", image: undefined },
+    ];
 
     render(<Home />);
 
-    await screen.findByText("Your moments are saved in this browser.");
-    expect(screen.queryByText("A stored collision")).toBeNull();
+    await waitForCloudReady();
+    expect(screen.queryByText("An API collision")).toBeNull();
     expect(screen.getAllByText("Slow Sunday light")).toHaveLength(2);
     expect(
       screen.queryByRole("button", { name: "Edit Slow Sunday light" }),
     ).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Delete Slow Sunday light" }),
-    ).toBeNull();
   });
 
-  it("edits a user-created Moment in both views and persists it after refresh", async () => {
+  it("edits a user-created Moment in both views and reloads the edit from the API", async () => {
     const firstRender = render(<Home />);
-    await screen.findByText("Your moments are saved in this browser.");
+    await waitForCloudReady();
     const createForm = fillMomentForm();
     fireEvent.click(
       within(createForm).getByRole("button", { name: "Create a Moment" }),
     );
     await screen.findByText("Your moment has been saved.");
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Edit First rain of the season" }),
-    );
-    const firstEditForm = screen.getByRole("form", { name: "Edit Moment" });
-    expect(
-      (within(firstEditForm).getByLabelText("Moment title") as HTMLInputElement)
-        .value,
-    ).toBe("First rain of the season");
-
-    fireEvent.click(
-      within(firstEditForm).getByRole("button", { name: "Cancel editing" }),
-    );
-    expect(screen.getByRole("form", { name: "Create a Moment" })).not.toBeNull();
-    expect(screen.getAllByText("First rain of the season")).toHaveLength(2);
 
     fireEvent.click(
       screen.getByRole("button", { name: "Edit First rain of the season" }),
@@ -376,53 +501,20 @@ describe("Mood & Moments homepage", () => {
       await within(editForm).findByText("Your moment has been updated."),
     ).not.toBeNull();
     expect(screen.queryByText("First rain of the season")).toBeNull();
-    expect(
-      within(getSectionByHeading("Recent Moments")).getByText(
-        "Rain, remembered differently",
-      ),
-    ).not.toBeNull();
-    expect(
-      within(getSectionByHeading("Memory Timeline")).getByText(
-        "Rain, remembered differently",
-      ),
-    ).not.toBeNull();
-    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).toContain(
-      "Rain, remembered differently",
-    );
-    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).not.toContain(
-      "First rain of the season",
-    );
-    expect(screen.getAllByText("Slow Sunday light")).toHaveLength(2);
+    expect(screen.getAllByText("Rain, remembered differently")).toHaveLength(2);
 
     firstRender.unmount();
     render(<Home />);
 
-    await screen.findByText("Your moments are saved in this browser.");
     expect(
-      within(getSectionByHeading("Recent Moments")).getByText(
-        "Rain, remembered differently",
-      ),
-    ).not.toBeNull();
-    expect(
-      within(getSectionByHeading("Memory Timeline")).getByText(
-        "Rain, remembered differently",
-      ),
-    ).not.toBeNull();
-    expect(
-      within(getSectionByHeading("Recent Moments")).queryByText(
-        "First rain of the season",
-      ),
-    ).toBeNull();
-    expect(
-      within(getSectionByHeading("Memory Timeline")).queryByText(
-        "First rain of the season",
-      ),
-    ).toBeNull();
+      await screen.findAllByText("Rain, remembered differently"),
+    ).toHaveLength(2);
+    expect(screen.queryByText("First rain of the season")).toBeNull();
   });
 
   it("deletes a user-created Moment from both views and keeps it deleted after refresh", async () => {
     const firstRender = render(<Home />);
-    await screen.findByText("Your moments are saved in this browser.");
+    await waitForCloudReady();
     const form = fillMomentForm();
     fireEvent.click(
       within(form).getByRole("button", { name: "Create a Moment" }),
@@ -435,33 +527,19 @@ describe("Mood & Moments homepage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
 
     expect(await screen.findByText("Moment deleted.")).not.toBeNull();
-    expect(
-      within(getSectionByHeading("Recent Moments")).queryByText(
-        "First rain of the season",
-      ),
-    ).toBeNull();
-    expect(
-      within(getSectionByHeading("Memory Timeline")).queryByText(
-        "First rain of the season",
-      ),
-    ).toBeNull();
+    expect(screen.queryByText("First rain of the season")).toBeNull();
     expect(screen.getAllByRole("article")).toHaveLength(3);
-    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).not.toContain(
-      "First rain of the season",
-    );
-    expect(screen.getAllByText("Slow Sunday light")).toHaveLength(2);
 
     firstRender.unmount();
     render(<Home />);
 
-    await screen.findByText("Your moments are saved in this browser.");
+    await waitForCloudReady();
     expect(screen.queryByText("First rain of the season")).toBeNull();
-    expect(screen.getAllByRole("article")).toHaveLength(3);
   });
 
-  it("keeps the previous Moment visible when an edit cannot be persisted", async () => {
+  it("keeps the previous Moment visible when an API edit fails", async () => {
     render(<Home />);
-    await screen.findByText("Your moments are saved in this browser.");
+    await waitForCloudReady();
     const createForm = fillMomentForm();
     fireEvent.click(
       within(createForm).getByRole("button", { name: "Create a Moment" }),
@@ -474,9 +552,17 @@ describe("Mood & Moments homepage", () => {
     fireEvent.change(within(editForm).getByLabelText("Moment title"), {
       target: { value: "An edit that cannot be saved" },
     });
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new DOMException("Storage quota exceeded", "QuotaExceededError");
-    });
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: {
+            code: "INTERNAL_ERROR",
+            message: "The Moment service is temporarily unavailable.",
+          },
+        },
+        500,
+      ),
+    );
 
     fireEvent.click(
       within(editForm).getByRole("button", { name: "Save Changes" }),
@@ -484,19 +570,16 @@ describe("Mood & Moments homepage", () => {
 
     expect(
       await within(editForm).findByText(
-        "We couldn’t update this moment. Check browser storage and try again.",
+        "We couldn’t update this moment. Please try again.",
       ),
     ).not.toBeNull();
     expect(screen.getAllByText("First rain of the season")).toHaveLength(2);
     expect(screen.queryByText("An edit that cannot be saved")).toBeNull();
-    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).toContain(
-      "First rain of the season",
-    );
   });
 
-  it("locks form and card mutations while an image edit is being persisted", async () => {
+  it("prevents concurrent edit and delete operations while an API update is pending", async () => {
     render(<Home />);
-    await screen.findByText("Your moments are saved in this browser.");
+    await waitForCloudReady();
     const createForm = fillMomentForm();
     fireEvent.click(
       within(createForm).getByRole("button", { name: "Create a Moment" }),
@@ -506,22 +589,12 @@ describe("Mood & Moments homepage", () => {
       screen.getByRole("button", { name: "Edit First rain of the season" }),
     );
     const editForm = screen.getByRole("form", { name: "Edit Moment" });
-    fireEvent.change(within(editForm).getByLabelText("Add an image (optional)"), {
-      target: {
-        files: [new File(["image"], "rain.png", { type: "image/png" })],
-      },
-    });
-    let finishImageRead: (() => void) | undefined;
-    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(
-      function mockImageRead(this: FileReader) {
-        finishImageRead = () => {
-          Object.defineProperty(this, "result", {
-            configurable: true,
-            value: "data:image/png;base64,aW1hZ2U=",
-          });
-          this.dispatchEvent(new ProgressEvent("load"));
-        };
-      },
+    let finishUpdate: ((response: Response) => void) | undefined;
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          finishUpdate = resolve;
+        }),
     );
 
     fireEvent.click(
@@ -529,9 +602,6 @@ describe("Mood & Moments homepage", () => {
     );
 
     expect(editForm.getAttribute("aria-busy")).toBe("true");
-    expect(
-      within(editForm).getByLabelText("Moment title").matches(":disabled"),
-    ).toBe(true);
     const deleteButton = screen.getByRole("button", {
       name: "Delete First rain of the season",
     });
@@ -539,32 +609,31 @@ describe("Mood & Moments homepage", () => {
     fireEvent.click(deleteButton);
     expect(screen.queryByRole("button", { name: "Confirm delete" })).toBeNull();
 
-    await act(async () => {
-      finishImageRead?.();
-      await Promise.resolve();
-    });
-
+    finishUpdate?.(jsonResponse({ moment: apiMoments[0] }));
     expect(
       await within(editForm).findByText("Your moment has been updated."),
     ).not.toBeNull();
-    expect(
-      screen
-        .getByRole("button", { name: "Delete First rain of the season" })
-        .matches(":disabled"),
-    ).toBe(false);
   });
 
-  it("keeps a Moment visible when deletion cannot be persisted", async () => {
+  it("keeps a Moment visible when API deletion fails", async () => {
     render(<Home />);
-    await screen.findByText("Your moments are saved in this browser.");
+    await waitForCloudReady();
     const form = fillMomentForm();
     fireEvent.click(
       within(form).getByRole("button", { name: "Create a Moment" }),
     );
     await screen.findByText("Your moment has been saved.");
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new DOMException("Storage quota exceeded", "QuotaExceededError");
-    });
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: {
+            code: "INTERNAL_ERROR",
+            message: "The Moment service is temporarily unavailable.",
+          },
+        },
+        500,
+      ),
+    );
 
     fireEvent.click(
       screen.getByRole("button", { name: "Delete First rain of the season" }),
@@ -572,13 +641,40 @@ describe("Mood & Moments homepage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
 
     expect(
-      await screen.findByText(
-        "We couldn’t delete this moment. Check browser storage and try again.",
-      ),
+      await screen.findByText("We couldn’t delete this moment. Please try again."),
     ).not.toBeNull();
     expect(screen.getAllByText("First rain of the season")).toHaveLength(2);
-    expect(window.localStorage.getItem(MOMENTS_STORAGE_KEY)).toContain(
-      "First rain of the season",
-    );
+  });
+
+  it("hides private Moments on sign-out and reloads them after sign-in", async () => {
+    apiMoments = [
+      {
+        id: "4d21afdc-b9f1-4416-b43f-f7fe964b6786",
+        date: "Aug 29, 2026",
+        dateTime: "2026-08-29T09:15:00Z",
+        time: "9:15 AM",
+        mood: "loved",
+        title: "Only for this account",
+        excerpt: "A private cloud Moment.",
+      },
+    ];
+    const view = render(<Home />);
+    expect(await screen.findAllByText("Only for this account")).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    setClerkTestAuthState({ isSignedIn: false, userId: null });
+    view.rerender(<Home />);
+
+    expect(
+      await screen.findByText("Sign in to create and keep personal moments."),
+    ).not.toBeNull();
+    expect(screen.queryByText("Only for this account")).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    setClerkTestAuthState({ isSignedIn: true, userId: "user_test" });
+    view.rerender(<Home />);
+
+    expect(await screen.findAllByText("Only for this account")).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

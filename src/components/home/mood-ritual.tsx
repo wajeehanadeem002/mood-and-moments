@@ -193,8 +193,8 @@ export function MoodRitual({
       setFeedback({
         kind: "error",
         message: isEditMode
-          ? "We couldn’t update this moment. Check browser storage and try again."
-          : "We couldn’t save this moment. Check browser storage and try again.",
+          ? "We couldn’t update this moment. Please try again."
+          : "We couldn’t save this moment. Please try again.",
       });
     } finally {
       submissionInProgressRef.current = false;
@@ -211,14 +211,14 @@ export function MoodRitual({
       (loadError
         ? {
             kind: "error",
-            message: "Your saved moments couldn’t be loaded in this browser.",
+            message: "Your saved moments couldn’t be loaded right now.",
           }
         : {
             kind: "success",
             message: isHydrating
               ? "Loading your saved moments…"
               : isAuthenticated
-                ? "Your moments are saved in this browser."
+                ? "Your moments are saved to your account."
                 : "Sign in to create and keep personal moments.",
           }));
 

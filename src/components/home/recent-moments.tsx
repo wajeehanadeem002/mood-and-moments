@@ -256,8 +256,7 @@ export function RecentMoments({
                               role="alert"
                               className="mt-3 text-sm leading-6 text-rose-soft"
                             >
-                              We couldn’t delete this moment. Check browser
-                              storage and try again.
+                              We couldn’t delete this moment. Please try again.
                             </p>
                           ) : null}
                         </form>

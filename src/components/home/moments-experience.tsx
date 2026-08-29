@@ -18,7 +18,7 @@ import {
   type MomentDraft,
   type UpdateMomentOptions,
 } from "@/lib/moment-creation";
-import { LocalStorageMomentRepository } from "@/repositories/local-storage-moment-repository";
+import { ApiMomentRepository } from "@/repositories/api-moment-repository";
 import type { MomentRepository } from "@/repositories/moment-repository";
 
 type HydrationState = "loading" | "ready" | "error";
@@ -81,7 +81,7 @@ function MomentsExperienceSession({
     }
 
     async function loadSavedMoments() {
-      const repository = new LocalStorageMomentRepository(window.localStorage);
+      const repository = new ApiMomentRepository();
       repositoryRef.current = repository;
       const moments = await repository.list();
 
