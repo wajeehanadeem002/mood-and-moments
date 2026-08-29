@@ -20,6 +20,36 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Authentication and database foundation
+
+Clerk provides application authentication. The Supabase foundation uses Clerk's native third-party authentication integration so PostgreSQL and Storage policies can authorize the current Clerk session through its `sub` claim.
+
+Configure these application variables in the repository-root `.env.local` file for local Next.js development and in the corresponding Vercel project environment settings for deployed environments:
+
+```bash
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
+CLERK_SECRET_KEY=
+SUPABASE_URL=
+SUPABASE_PUBLISHABLE_KEY=
+```
+
+`SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` are intentionally server-only. Normal user operations must not use a Supabase secret or service-role key because those credentials bypass Row Level Security.
+
+Complete the native provider connection before exercising authenticated Supabase requests:
+
+1. Activate the Supabase integration for the Clerk instance and copy its Clerk domain.
+2. Add Clerk as a third-party authentication provider in the Supabase dashboard using that domain.
+3. Set `CLERK_DOMAIN` in the shell environment when running the local Supabase stack. `supabase/config.toml` reads this value without committing an instance-specific domain.
+
+The local database test workflow requires Docker Desktop or Podman:
+
+```bash
+pnpm exec supabase start
+pnpm test:db
+```
+
+The current milestone provides the schema, RLS tests, and authenticated server client only. The existing Moment UI still uses browser localStorage until the next approved milestone.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
