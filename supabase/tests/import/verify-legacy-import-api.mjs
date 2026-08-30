@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 const CLERK_API_URL = "https://api.clerk.com/v1";
 const TEST_IMAGE = new Blob(
@@ -10,6 +10,16 @@ const TEST_IMAGE = new Blob(
   ],
   { type: "image/png" },
 );
+const TEST_IMAGE_B = new Blob(
+  [Buffer.concat([Buffer.from(await TEST_IMAGE.arrayBuffer()), Buffer.from([0x42])])],
+  { type: "image/png" },
+);
+
+async function imageHash(image) {
+  return createHash("sha256")
+    .update(Buffer.from(await image.arrayBuffer()))
+    .digest("hex");
+}
 
 function requireEnvironmentVariable(name) {
   const value = process.env[name]?.trim();
@@ -97,6 +107,23 @@ async function apiRequest(baseUrl, token, path, options = {}) {
   });
 }
 
+async function momentMetadata(supabaseUrl, publishableKey, token, momentId) {
+  const response = await fetch(
+    `${supabaseUrl}/rest/v1/moments?select=id,image_path,import_image_hash&id=eq.${encodeURIComponent(momentId)}`,
+    {
+      headers: {
+        Accept: "application/json",
+        apikey: publishableKey,
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
+  return {
+    body: await response.json().catch(() => null),
+    status: response.status,
+  };
+}
+
 function record(results, passed, description, detail) {
   results.push({ passed, description, detail });
   console.log(`${passed ? "ok" : "not ok"} ${results.length} - ${description}`);
@@ -104,7 +131,9 @@ function record(results, passed, description, detail) {
 
 async function run() {
   const secretKey = requireEnvironmentVariable("CLERK_SECRET_KEY");
-  const baseUrl = process.env.MOMENTS_TEST_BASE_URL?.trim() ?? "http://127.0.0.1:3000";
+  const supabaseUrl = requireEnvironmentVariable("SUPABASE_URL");
+  const publishableKey = requireEnvironmentVariable("SUPABASE_PUBLISHABLE_KEY");
+  const baseUrl = process.env.MOMENTS_TEST_BASE_URL?.trim() ?? "http://localhost:3000";
   const runId = randomUUID();
   const sourceId = `hosted-${runId}`;
   const identities = [];
@@ -184,6 +213,137 @@ async function run() {
       `status ${retry.status}`,
     );
 
+    const firstMetadata = await momentMetadata(
+      supabaseUrl,
+      publishableKey,
+      owner.token,
+      importedId,
+    );
+    record(
+      results,
+      firstMetadata.status === 200 &&
+        firstMetadata.body?.length === 1 &&
+        firstMetadata.body[0]?.import_image_hash ===
+          (await imageHash(TEST_IMAGE)),
+      "the database stores SHA-256 of the actual imported image bytes",
+      `status ${firstMetadata.status}`,
+    );
+
+    const differentImageRetry = await apiRequest(
+      baseUrl,
+      owner.token,
+      "/api/moments/import",
+      {
+        method: "POST",
+        body: importBody(sourceId, { image: TEST_IMAGE_B }),
+      },
+    );
+    const differentImageRetryBody = await differentImageRetry
+      .json()
+      .catch(() => null);
+    record(
+      results,
+      differentImageRetry.status === 200 &&
+        differentImageRetryBody?.result?.outcome === "image_mismatch" &&
+        differentImageRetryBody?.result?.imageOutcome === "mismatch",
+      "a retry with different image bytes remains explicitly incomplete",
+      `status ${differentImageRetry.status}`,
+    );
+
+    const unchangedImage = await apiRequest(
+      baseUrl,
+      owner.token,
+      `/api/moments/${importedId}/image`,
+    );
+    record(
+      results,
+      unchangedImage.ok &&
+        Buffer.from(await unchangedImage.arrayBuffer()).equals(
+          Buffer.from(await TEST_IMAGE.arrayBuffer()),
+        ),
+      "a mismatched retry neither replaces nor claims the stored image",
+      `status ${unchangedImage.status}`,
+    );
+
+    const repairedSourceId = `${sourceId}-repaired`;
+    const textOnly = await apiRequest(baseUrl, owner.token, "/api/moments/import", {
+      method: "POST",
+      body: importBody(repairedSourceId),
+    });
+    const textOnlyBody = await textOnly.json().catch(() => null);
+    const repairedId = textOnlyBody?.result?.moment?.id;
+    if (repairedId) created.push({ id: repairedId, token: owner.token });
+    const repaired = await apiRequest(baseUrl, owner.token, "/api/moments/import", {
+      method: "POST",
+      body: importBody(repairedSourceId, { image: TEST_IMAGE_B }),
+    });
+    const repairedBody = await repaired.json().catch(() => null);
+    const repairedMetadata = repairedId
+      ? await momentMetadata(
+          supabaseUrl,
+          publishableKey,
+          owner.token,
+          repairedId,
+        )
+      : { body: null, status: 0 };
+    record(
+      results,
+      textOnly.status === 201 &&
+        repaired.status === 200 &&
+        repairedBody?.result?.outcome === "completed_existing" &&
+        repairedBody?.result?.imageOutcome === "uploaded" &&
+        repairedBody?.result?.moment?.id === repairedId &&
+        repairedMetadata.body?.[0]?.import_image_hash ===
+          (await imageHash(TEST_IMAGE_B)),
+      "a valid repaired image completes the existing text-only import",
+      `statuses ${textOnly.status}/${repaired.status}`,
+    );
+
+    const raceSourceId = `${sourceId}-race`;
+    const [raceA, raceB] = await Promise.all([
+      apiRequest(baseUrl, owner.token, "/api/moments/import", {
+        method: "POST",
+        body: importBody(raceSourceId, { image: TEST_IMAGE }),
+      }),
+      apiRequest(baseUrl, owner.token, "/api/moments/import", {
+        method: "POST",
+        body: importBody(raceSourceId, { image: TEST_IMAGE_B }),
+      }),
+    ]);
+    const raceBodies = await Promise.all([
+      raceA.json().catch(() => null),
+      raceB.json().catch(() => null),
+    ]);
+    const raceResults = raceBodies.map((body) => body?.result).filter(Boolean);
+    const raceId = raceResults[0]?.moment?.id;
+    if (raceId) created.push({ id: raceId, token: owner.token });
+    const winningResult = raceResults.find(
+      (result) => result.imageOutcome === "uploaded",
+    );
+    const winningImage = winningResult === raceBodies[0]?.result
+      ? TEST_IMAGE
+      : TEST_IMAGE_B;
+    const raceMetadata = raceId
+      ? await momentMetadata(
+          supabaseUrl,
+          publishableKey,
+          owner.token,
+          raceId,
+        )
+      : { body: null, status: 0 };
+    record(
+      results,
+      [raceA.status, raceB.status].every((status) => [200, 201].includes(status)) &&
+        raceResults.length === 2 &&
+        new Set(raceResults.map((result) => result.moment.id)).size === 1 &&
+        raceResults.some((result) => result.imageOutcome === "uploaded") &&
+        raceResults.some((result) => result.imageOutcome === "mismatch") &&
+        raceMetadata.body?.[0]?.import_image_hash ===
+          (await imageHash(winningImage)),
+      "concurrent different images converge on one Moment and the winning byte digest",
+      `statuses ${raceA.status}/${raceB.status}`,
+    );
+
     const conflict = await apiRequest(baseUrl, owner.token, "/api/moments/import", {
       method: "POST",
       body: importBody(sourceId, { title: "Changed after import" }),
@@ -204,6 +364,19 @@ async function run() {
         !otherMoments.some((moment) => moment.id === importedId),
       "another Clerk user cannot read the owner's imported Moment",
       `status ${otherList.status}`,
+    );
+
+    const otherMetadata = await momentMetadata(
+      supabaseUrl,
+      publishableKey,
+      other.token,
+      importedId,
+    );
+    record(
+      results,
+      otherMetadata.status === 200 && otherMetadata.body?.length === 0,
+      "another Clerk user cannot read the import image digest",
+      `status ${otherMetadata.status}`,
     );
 
     const ownerImage = await apiRequest(
@@ -247,6 +420,23 @@ async function run() {
       invalidImage.status === 422,
       "server-side signature validation rejects a spoofed image",
       `status ${invalidImage.status}`,
+    );
+
+    const manufacturedDigest = importBody(`${sourceId}-manufactured`, {
+      image: TEST_IMAGE,
+    });
+    manufacturedDigest.set("import_image_hash", "f".repeat(64));
+    const manufactured = await apiRequest(
+      baseUrl,
+      owner.token,
+      "/api/moments/import",
+      { method: "POST", body: manufacturedDigest },
+    );
+    record(
+      results,
+      manufactured.status === 422,
+      "client input cannot manufacture an import image digest",
+      `status ${manufactured.status}`,
     );
 
     const otherImport = await apiRequest(

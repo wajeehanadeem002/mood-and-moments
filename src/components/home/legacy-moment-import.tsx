@@ -15,8 +15,11 @@ import {
   ApiLegacyMomentImportRepositoryError,
   type LegacyMomentImportApiResult,
 } from "@/repositories/api-legacy-moment-import-repository";
+import { BrowserLegacyImportCoordination } from "@/repositories/legacy-import-coordination";
 import {
+  LegacyMomentSourceError,
   LocalStorageLegacyMomentSource,
+  type LegacyImportAssociation,
   type LegacySourceInspection,
 } from "@/repositories/local-storage-legacy-moment-source";
 
@@ -27,14 +30,18 @@ type LegacyMomentImportProps = {
 
 type ItemResult = {
   candidate: LegacyImportCandidate;
-  kind: "imported" | "failed" | "conflicted";
+  kind: "imported" | "failed" | "conflicted" | "image-mismatch";
   imageComplete: boolean;
   result?: LegacyMomentImportApiResult;
 };
 
 type PanelError =
   | "association-other"
+  | "association-pending-current"
+  | "association-pending-other"
   | "association-corrupt"
+  | "claim-lost"
+  | "claim-persistence"
   | "source-unavailable"
   | "source-invalid"
   | "cleanup-failed";
@@ -74,8 +81,16 @@ function errorMessage(error: PanelError) {
   switch (error) {
     case "association-other":
       return "This browser’s legacy Moments were already associated with another account.";
+    case "association-pending-current":
+      return "This account already has a legacy import in progress in another tab.";
+    case "association-pending-other":
+      return "Another account is currently importing this browser’s legacy Moments. Wait for that import to finish or for its claim to expire.";
     case "association-corrupt":
       return "The local import association cannot be verified. No Moments were imported.";
+    case "claim-lost":
+      return "The browser import claim changed in another tab, so this import was stopped before continuing.";
+    case "claim-persistence":
+      return "The cloud import succeeded, but its local association could not be finalized. This browser remains locked to this pending import for safety.";
     case "source-unavailable":
       return "Browser storage is unavailable, so legacy Moments cannot be reviewed.";
     case "source-invalid":
@@ -107,7 +122,11 @@ function CandidateRow({
           </span>
         ) : result ? (
           <span className="text-xs font-medium text-rose-soft">
-            {result.kind === "conflicted" ? "Changed locally" : "Try again"}
+            {result.kind === "conflicted"
+              ? "Changed locally"
+              : result.kind === "image-mismatch"
+                ? "Image differs"
+                : "Try again"}
           </span>
         ) : null}
       </div>
@@ -116,6 +135,11 @@ function CandidateRow({
           {result?.kind === "imported"
             ? "Imported without image; kept locally for review."
             : imageIssueLabels[candidate.imageIssue]}
+        </p>
+      ) : null}
+      {result?.kind === "image-mismatch" ? (
+        <p className="mt-2 text-sm leading-6 text-rose-soft">
+          Cloud image differs; kept locally for retry.
         </p>
       ) : null}
     </li>
@@ -141,6 +165,11 @@ export function LegacyMomentImport({
   const apiRef = useRef<ApiLegacyMomentImportRepository | null>(null);
   const operationInProgressRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
+  const unsubscribeRef = useRef<(() => void) | null>(null);
+  const activeClaimRef = useRef<{
+    claimId: string;
+    cloudSucceeded: boolean;
+  } | null>(null);
   const [inspection, setInspection] = useState<LegacySourceInspection | null>(
     null,
   );
@@ -152,17 +181,75 @@ export function LegacyMomentImport({
   const [confirmingCleanup, setConfirmingCleanup] = useState(false);
   const [cleanupStatus, setCleanupStatus] = useState<string | null>(null);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    return () => {
       abortRef.current?.abort();
-    },
-    [],
-  );
+      const activeClaim = activeClaimRef.current;
+      if (activeClaim && !activeClaim.cloudSucceeded) {
+        const release = sourceRef.current?.releaseClaim(
+          userId,
+          activeClaim.claimId,
+        );
+        void release?.catch(() => undefined);
+      }
+      unsubscribeRef.current?.();
+      sourceRef.current?.close();
+    };
+  }, [userId]);
+
+  function panelErrorForAssociation(
+    association: LegacyImportAssociation,
+  ): PanelError | null {
+    switch (association) {
+      case "other":
+        return "association-other";
+      case "pending-current":
+        return "association-pending-current";
+      case "pending-other":
+        return "association-pending-other";
+      case "corrupt":
+        return "association-corrupt";
+      default:
+        return null;
+    }
+  }
+
+  async function handleImportStateChange() {
+    const localSource = sourceRef.current;
+    if (!localSource) return;
+    const activeClaim = activeClaimRef.current;
+    if (
+      activeClaim &&
+      (await localSource.verifyClaim(userId, activeClaim.claimId))
+    ) {
+      return;
+    }
+
+    const association = await localSource.associationFor(userId);
+    if (association === "current" || association === "unbound") return;
+    abortRef.current?.abort();
+    activeClaimRef.current = null;
+    setInspection(null);
+    setPanelError(
+      panelErrorForAssociation(association) ?? "claim-lost",
+    );
+  }
 
   function source() {
-    sourceRef.current ??= new LocalStorageLegacyMomentSource(
-      window.localStorage,
-    );
+    if (!sourceRef.current) {
+      const coordination = new BrowserLegacyImportCoordination();
+      sourceRef.current = new LocalStorageLegacyMomentSource(
+        window.localStorage,
+        { coordination },
+      );
+      unsubscribeRef.current = sourceRef.current.subscribe(() => {
+        void handleImportStateChange().catch(() => {
+          abortRef.current?.abort();
+          setInspection(null);
+          setPanelError("claim-lost");
+        });
+      });
+    }
     return sourceRef.current;
   }
 
@@ -179,12 +266,9 @@ export function LegacyMomentImport({
     setCleanupStatus(null);
     try {
       const association = await source().associationFor(userId);
-      if (association === "other") {
-        setPanelError("association-other");
-        return;
-      }
-      if (association === "corrupt") {
-        setPanelError("association-corrupt");
+      const associationError = panelErrorForAssociation(association);
+      if (associationError) {
+        setPanelError(associationError);
         return;
       }
       const nextInspection = await source().inspect();
@@ -209,31 +293,121 @@ export function LegacyMomentImport({
     setProgress({ current: 0, total: candidates.length });
     const controller = new AbortController();
     abortRef.current = controller;
+    let operationClaim = activeClaimRef.current;
+    let associationFinalized = false;
+    let canSafelyReleaseClaim = true;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
 
     try {
+      const association = await source().associationFor(userId);
+      if (association === "current") {
+        operationClaim = null;
+        activeClaimRef.current = null;
+        associationFinalized = true;
+      } else if (association === "pending-current" && operationClaim) {
+        if (!(await source().verifyClaim(userId, operationClaim.claimId))) {
+          setPanelError("claim-lost");
+          setInspection(null);
+          return;
+        }
+      } else if (association === "unbound") {
+        const acquired = await source().acquireClaim(userId);
+        if (acquired.status === "blocked") {
+          setPanelError(
+            panelErrorForAssociation(acquired.association) ?? "claim-lost",
+          );
+          setInspection(null);
+          return;
+        }
+        operationClaim = {
+          claimId: acquired.claimId,
+          cloudSucceeded: false,
+        };
+        activeClaimRef.current = operationClaim;
+      } else {
+        setPanelError(panelErrorForAssociation(association) ?? "claim-lost");
+        setInspection(null);
+        return;
+      }
+
+      if (operationClaim && !associationFinalized) {
+        heartbeat = setInterval(() => {
+          const activeClaim = activeClaimRef.current;
+          if (
+            !activeClaim ||
+            activeClaim.claimId !== operationClaim?.claimId
+          ) {
+            return;
+          }
+          void source()
+            .renewClaim(userId, activeClaim.claimId)
+            .then(async (renewed) => {
+              if (renewed) return;
+              if ((await source().associationFor(userId)) === "current") {
+                return;
+              }
+              controller.abort();
+              activeClaimRef.current = null;
+              setInspection(null);
+              setPanelError("claim-lost");
+            })
+            .catch(() => {
+              controller.abort();
+              setPanelError("claim-lost");
+            });
+        }, 30_000);
+      }
+
       for (const [index, candidate] of candidates.entries()) {
         if (controller.signal.aborted) break;
+        if (
+          index > 0 &&
+          operationClaim &&
+          !associationFinalized &&
+          !(await source().renewClaim(userId, operationClaim.claimId))
+        ) {
+          controller.abort();
+          activeClaimRef.current = null;
+          setInspection(null);
+          setPanelError("claim-lost");
+          break;
+        }
+        let requestSucceeded = false;
         try {
           const imported = await api().import(candidate, controller.signal);
+          requestSucceeded = true;
+          if (operationClaim) operationClaim.cloudSucceeded = true;
           if (controller.signal.aborted) break;
           const imageComplete =
             candidate.imageIssue === null &&
             (candidate.image === null ||
               imported.imageOutcome === "uploaded" ||
               imported.imageOutcome === "already_present");
+          await source().recordConfirmedImport(
+            userId,
+            {
+              cloudMomentId: imported.moment.id,
+              imageComplete,
+              localRecordHash: candidate.localRecordHash,
+              sourceHash: imported.sourceHash,
+              sourceId: imported.sourceId,
+            },
+            operationClaim?.claimId,
+          );
+          associationFinalized = true;
+          if (heartbeat !== null) {
+            clearInterval(heartbeat);
+            heartbeat = null;
+          }
           onImportedMoment(imported.moment);
-          await source().recordConfirmedImport(userId, {
-            cloudMomentId: imported.moment.id,
-            imageComplete,
-            localRecordHash: candidate.localRecordHash,
-            sourceHash: imported.sourceHash,
-            sourceId: imported.sourceId,
-          });
           setResults((current) => {
             const next = new Map(current);
             next.set(candidate.sourceId, {
               candidate,
-              kind: "imported",
+              kind:
+                imported.imageOutcome === "mismatch"
+                  ? "image-mismatch"
+                  : "imported",
               imageComplete,
               result: imported,
             });
@@ -241,6 +415,16 @@ export function LegacyMomentImport({
           });
         } catch (error) {
           if (controller.signal.aborted) break;
+          if (
+            !(error instanceof ApiLegacyMomentImportRepositoryError) ||
+            error.status === undefined ||
+            error.status < 400
+          ) {
+            canSafelyReleaseClaim = false;
+          }
+          if (requestSucceeded && error instanceof LegacyMomentSourceError) {
+            setPanelError("claim-persistence");
+          }
           setResults((current) => {
             const next = new Map(current);
             next.set(candidate.sourceId, {
@@ -260,7 +444,28 @@ export function LegacyMomentImport({
           }
         }
       }
+    } catch {
+      setPanelError(
+        operationClaim?.cloudSucceeded ? "claim-persistence" : "claim-lost",
+      );
     } finally {
+      if (heartbeat !== null) clearInterval(heartbeat);
+      if (
+        operationClaim &&
+        !operationClaim.cloudSucceeded &&
+        canSafelyReleaseClaim
+      ) {
+        try {
+          await source().releaseClaim(userId, operationClaim.claimId);
+        } catch {
+          setPanelError("claim-lost");
+        }
+        if (activeClaimRef.current?.claimId === operationClaim.claimId) {
+          activeClaimRef.current = null;
+        }
+      } else if (associationFinalized) {
+        activeClaimRef.current = null;
+      }
       if (abortRef.current === controller) abortRef.current = null;
       operationInProgressRef.current = false;
       setIsImporting(false);
@@ -300,11 +505,21 @@ export function LegacyMomentImport({
     inspection?.kind === "ready" ? inspection : undefined;
   const failedCandidates = readyInspection?.candidates.filter((candidate) => {
     const result = results.get(candidate.sourceId);
-    return result?.kind === "failed" || result?.kind === "conflicted";
+    return (
+      result?.kind === "failed" ||
+      result?.kind === "conflicted" ||
+      result?.kind === "image-mismatch"
+    );
   });
   const cleanupEligibleCount = Array.from(results.values()).filter(
     (result) => result.kind === "imported" && result.imageComplete,
   ).length;
+  const importBlocked =
+    panelError === "association-other" ||
+    panelError === "association-pending-current" ||
+    panelError === "association-pending-other" ||
+    panelError === "association-corrupt" ||
+    panelError === "claim-lost";
 
   return (
     <section
@@ -360,7 +575,11 @@ export function LegacyMomentImport({
                 aria-label={
                   panelError === "association-other"
                     ? "Legacy Moments belong to another account"
-                    : "Legacy Moment import unavailable"
+                    : panelError === "association-pending-current" ||
+                        panelError === "association-pending-other" ||
+                        panelError === "claim-lost"
+                      ? "Legacy Moment import in progress"
+                      : "Legacy Moment import unavailable"
                 }
                 className="rounded-sm border border-rose/30 bg-rose/[0.08] p-4"
               >
@@ -371,7 +590,7 @@ export function LegacyMomentImport({
               </div>
             ) : null}
 
-            {readyInspection ? (
+            {readyInspection && !importBlocked ? (
               <div>
                 <div className="flex flex-wrap gap-2" aria-label="Import preview totals">
                   <span className="rounded-full border border-champagne/25 bg-champagne/[0.06] px-3 py-1.5 text-xs font-medium text-champagne">

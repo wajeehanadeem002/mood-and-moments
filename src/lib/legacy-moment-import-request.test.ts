@@ -32,7 +32,12 @@ describe("parseLegacyMomentImportFormData", () => {
   });
 
   it("rejects ownership, cloud ids, paths, and duplicate fields", async () => {
-    for (const field of ["ownerId", "id", "imagePath"]) {
+    for (const field of [
+      "ownerId",
+      "id",
+      "imagePath",
+      "importImageHash",
+    ]) {
       const form = validForm();
       form.set(field, "caller-controlled");
       await expect(parseLegacyMomentImportFormData(form)).resolves.toEqual({

@@ -74,9 +74,9 @@ async function createTestIdentity(secretKey, label, runId) {
   return { sessionId: session.id, token: token.jwt, userId: user.id };
 }
 
-function createAuthenticatedStorageClient(url, publishableKey, token) {
+function createStorageClient(url, publishableKey, token) {
   return createClient(url, publishableKey, {
-    accessToken: async () => token,
+    ...(token ? { accessToken: async () => token } : {}),
     auth: {
       autoRefreshToken: false,
       detectSessionInUrl: false,
@@ -85,9 +85,48 @@ function createAuthenticatedStorageClient(url, publishableKey, token) {
   });
 }
 
+async function createTestMoment(client, label) {
+  const { data, error } = await client
+    .from("moments")
+    .insert({
+      title: `${label} Storage Moment`,
+      description: "An isolated Moment created for Storage RLS verification.",
+      mood: "calm",
+      moment_date: "2026-08-30",
+    })
+    .select("id")
+    .single();
+
+  if (error || !data?.id) {
+    throw new Error(
+      error?.message ?? "Could not create a Moment for Storage verification.",
+    );
+  }
+
+  return data.id;
+}
+
 function recordResult(results, passed, description, detail) {
   results.push({ passed, description, detail });
   console.log(`${passed ? "ok" : "not ok"} ${results.length} - ${description}`);
+}
+
+async function readBytes(client, objectPath) {
+  const download = await client.storage.from(BUCKET_NAME).download(objectPath);
+  const bytes = download.data
+    ? Buffer.from(await download.data.arrayBuffer())
+    : null;
+
+  return { bytes, error: download.error };
+}
+
+async function runCleanupStep(cleanupErrors, description, action) {
+  try {
+    await action();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown cleanup error.";
+    cleanupErrors.push(new Error(`${description}: ${message}`));
+  }
 }
 
 async function run() {
@@ -97,9 +136,9 @@ async function run() {
   const runId = randomUUID();
   const identities = [];
   const results = [];
-  let ownerClient;
-  let objectPath;
-  let objectMayExist = false;
+  const cleanupObjects = [];
+  const cleanupMoments = [];
+  let verificationError;
 
   try {
     const owner = await createTestIdentity(clerkSecretKey, "owner", runId);
@@ -107,30 +146,157 @@ async function run() {
     const otherUser = await createTestIdentity(clerkSecretKey, "other", runId);
     identities.push(otherUser);
 
-    ownerClient = createAuthenticatedStorageClient(
+    const ownerClient = createStorageClient(
       supabaseUrl,
       publishableKey,
       owner.token,
     );
-    const otherClient = createAuthenticatedStorageClient(
+    const otherClient = createStorageClient(
       supabaseUrl,
       publishableKey,
       otherUser.token,
     );
-    objectPath = `${owner.userId}/${runId}/image`;
+    const anonymousClient = createStorageClient(supabaseUrl, publishableKey);
 
+    const ownerMomentId = await createTestMoment(ownerClient, "Owner");
+    cleanupMoments.push({ client: ownerClient, id: ownerMomentId });
+    const ownerEmptyMomentId = await createTestMoment(ownerClient, "Owner Empty");
+    cleanupMoments.push({ client: ownerClient, id: ownerEmptyMomentId });
+    const otherMomentId = await createTestMoment(otherClient, "Other User");
+    cleanupMoments.push({ client: otherClient, id: otherMomentId });
+
+    const objectPath = `${owner.userId}/${ownerMomentId}/image`;
     const upload = await ownerClient.storage.from(BUCKET_NAME).upload(
       objectPath,
       TEST_IMAGE,
       { contentType: "image/png", upsert: false },
     );
-    objectMayExist = !upload.error;
+    if (!upload.error) {
+      cleanupObjects.push({ client: ownerClient, path: objectPath });
+    }
     recordResult(
       results,
       !upload.error && upload.data?.path === objectPath,
-      "the owner can upload an isolated image inside their own folder",
+      "the owner can upload the exact canonical path for their own Moment",
       upload.error?.message,
     );
+
+    const ownerRead = await readBytes(ownerClient, objectPath);
+    recordResult(
+      results,
+      !ownerRead.error && ownerRead.bytes?.equals(TEST_IMAGE) === true,
+      "the owner can read their own canonical Moment image",
+      ownerRead.error?.message,
+    );
+
+    const anonymousDownload = await anonymousClient.storage
+      .from(BUCKET_NAME)
+      .download(objectPath);
+    recordResult(
+      results,
+      Boolean(anonymousDownload.error) && !anonymousDownload.data,
+      "an anonymous user cannot read a private Moment image",
+      anonymousDownload.error?.message,
+    );
+
+    const anonymousUploadPath = `${owner.userId}/${ownerEmptyMomentId}/image`;
+    const anonymousUpload = await anonymousClient.storage
+      .from(BUCKET_NAME)
+      .upload(anonymousUploadPath, TEST_IMAGE, {
+        contentType: "image/png",
+        upsert: false,
+      });
+    recordResult(
+      results,
+      Boolean(anonymousUpload.error),
+      "an anonymous user cannot insert a canonical Moment image",
+      anonymousUpload.error?.message,
+    );
+
+    const anonymousReplacement = await anonymousClient.storage
+      .from(BUCKET_NAME)
+      .update(objectPath, REPLACEMENT_IMAGE, {
+        contentType: "image/png",
+        upsert: false,
+      });
+    const afterAnonymousReplacement = await readBytes(ownerClient, objectPath);
+    recordResult(
+      results,
+      Boolean(anonymousReplacement.error) &&
+        !afterAnonymousReplacement.error &&
+        afterAnonymousReplacement.bytes?.equals(TEST_IMAGE) === true,
+      "an anonymous user cannot update an owner's Moment image",
+      anonymousReplacement.error?.message ??
+        afterAnonymousReplacement.error?.message,
+    );
+
+    const anonymousDelete = await anonymousClient.storage
+      .from(BUCKET_NAME)
+      .remove([objectPath]);
+    const afterAnonymousDelete = await readBytes(ownerClient, objectPath);
+    recordResult(
+      results,
+      !afterAnonymousDelete.error &&
+        afterAnonymousDelete.bytes?.equals(TEST_IMAGE) === true,
+      "an anonymous user cannot delete an owner's Moment image",
+      anonymousDelete.error?.message ?? afterAnonymousDelete.error?.message,
+    );
+
+    const invalidPaths = [
+      {
+        description: "a wrong-owner folder is denied",
+        path: `${otherUser.userId}/${ownerMomentId}/image`,
+      },
+      {
+        description: "a non-existent Moment ID is denied",
+        path: `${owner.userId}/${randomUUID()}/image`,
+      },
+      {
+        description: "a Moment owned by another user is denied",
+        path: `${owner.userId}/${otherMomentId}/image`,
+      },
+      {
+        description: "an invalid UUID path segment is denied",
+        path: `${owner.userId}/not-a-uuid/image`,
+      },
+      {
+        description: "a wrong final path segment is denied",
+        path: `${owner.userId}/${ownerMomentId}/thumbnail`,
+      },
+      {
+        description: "a path with too few segments is denied",
+        path: `${owner.userId}/${ownerMomentId}`,
+      },
+      {
+        description: "a path with too many segments is denied",
+        path: `${owner.userId}/${ownerMomentId}/image/extra`,
+      },
+      {
+        description: "an arbitrary object name under the owner folder is denied",
+        path: `${owner.userId}/arbitrary-object`,
+      },
+    ];
+
+    for (const invalidPath of invalidPaths) {
+      const attempt = await ownerClient.storage
+        .from(BUCKET_NAME)
+        .upload(invalidPath.path, TEST_IMAGE, {
+          contentType: "image/png",
+          upsert: false,
+        });
+      if (!attempt.error) {
+        cleanupObjects.push({
+          client: ownerClient,
+          path: invalidPath.path,
+        });
+      }
+      recordResult(
+        results,
+        Boolean(attempt.error),
+        invalidPath.description,
+        attempt.error?.message,
+      );
+    }
 
     const crossUserDownload = await otherClient.storage
       .from(BUCKET_NAME)
@@ -148,18 +314,13 @@ async function run() {
         contentType: "image/png",
         upsert: false,
       });
-    const afterOwnerReplacement = await ownerClient.storage
-      .from(BUCKET_NAME)
-      .download(objectPath);
-    const replacementBytes = afterOwnerReplacement.data
-      ? Buffer.from(await afterOwnerReplacement.data.arrayBuffer())
-      : null;
+    const afterOwnerReplacement = await readBytes(ownerClient, objectPath);
     recordResult(
       results,
       !ownerReplacement.error &&
         !afterOwnerReplacement.error &&
-        replacementBytes?.equals(REPLACEMENT_IMAGE) === true,
-      "the owner can replace their own object at the stable path",
+        afterOwnerReplacement.bytes?.equals(REPLACEMENT_IMAGE) === true,
+      "the owner can update their own object at the stable canonical path",
       ownerReplacement.error?.message ?? afterOwnerReplacement.error?.message,
     );
 
@@ -169,18 +330,13 @@ async function run() {
         contentType: "image/png",
         upsert: false,
       });
-    const afterCrossUserReplacement = await ownerClient.storage
-      .from(BUCKET_NAME)
-      .download(objectPath);
-    const preservedBytes = afterCrossUserReplacement.data
-      ? Buffer.from(await afterCrossUserReplacement.data.arrayBuffer())
-      : null;
+    const afterCrossUserReplacement = await readBytes(ownerClient, objectPath);
     recordResult(
       results,
       Boolean(crossUserReplacement.error) &&
         !afterCrossUserReplacement.error &&
-        preservedBytes?.equals(REPLACEMENT_IMAGE) === true,
-      "another authenticated user cannot replace the owner's object",
+        afterCrossUserReplacement.bytes?.equals(REPLACEMENT_IMAGE) === true,
+      "another authenticated user cannot update the owner's object",
       crossUserReplacement.error?.message ??
         afterCrossUserReplacement.error?.message,
     );
@@ -191,17 +347,12 @@ async function run() {
         contentType: "image/png",
         upsert: true,
       });
-    const afterOwnerRestore = await ownerClient.storage
-      .from(BUCKET_NAME)
-      .download(objectPath);
-    const restoredBytes = afterOwnerRestore.data
-      ? Buffer.from(await afterOwnerRestore.data.arrayBuffer())
-      : null;
+    const afterOwnerRestore = await readBytes(ownerClient, objectPath);
     recordResult(
       results,
       !ownerRestore.error &&
         !afterOwnerRestore.error &&
-        restoredBytes?.equals(TEST_IMAGE) === true,
+        afterOwnerRestore.bytes?.equals(TEST_IMAGE) === true,
       "the owner-scoped policies permit compensating object restoration",
       ownerRestore.error?.message ?? afterOwnerRestore.error?.message,
     );
@@ -209,17 +360,16 @@ async function run() {
     const crossUserDelete = await otherClient.storage
       .from(BUCKET_NAME)
       .remove([objectPath]);
-    const afterCrossUserDelete = await ownerClient.storage
-      .from(BUCKET_NAME)
-      .download(objectPath);
+    const afterCrossUserDelete = await readBytes(ownerClient, objectPath);
     recordResult(
       results,
-      !afterCrossUserDelete.error && Boolean(afterCrossUserDelete.data),
+      !afterCrossUserDelete.error &&
+        afterCrossUserDelete.bytes?.equals(TEST_IMAGE) === true,
       "another authenticated user cannot delete the owner's object",
       crossUserDelete.error?.message ?? afterCrossUserDelete.error?.message,
     );
 
-    const invalidMimePath = `${owner.userId}/${randomUUID()}/image`;
+    const invalidMimePath = `${owner.userId}/${ownerEmptyMomentId}/image`;
     const invalidMimeUpload = await ownerClient.storage
       .from(BUCKET_NAME)
       .upload(invalidMimePath, Buffer.from("not an image"), {
@@ -233,10 +383,9 @@ async function run() {
       invalidMimeUpload.error?.message,
     );
 
-    const oversizedPath = `${owner.userId}/${randomUUID()}/image`;
     const oversizedUpload = await ownerClient.storage
       .from(BUCKET_NAME)
-      .upload(oversizedPath, Buffer.alloc(1_000_001), {
+      .upload(invalidMimePath, Buffer.alloc(1_000_001), {
         contentType: "image/png",
         upsert: false,
       });
@@ -253,15 +402,12 @@ async function run() {
     const afterOwnerDelete = await ownerClient.storage
       .from(BUCKET_NAME)
       .download(objectPath);
-    const ownerDeletedObject =
-      !ownerDelete.error && Boolean(afterOwnerDelete.error) && !afterOwnerDelete.data;
     recordResult(
       results,
-      ownerDeletedObject,
+      !ownerDelete.error && Boolean(afterOwnerDelete.error) && !afterOwnerDelete.data,
       "the owner can delete their own object through the Storage API",
       ownerDelete.error?.message,
     );
-    objectMayExist = !ownerDeletedObject;
 
     const failures = results.filter((result) => !result.passed);
     if (failures.length > 0) {
@@ -273,19 +419,98 @@ async function run() {
         `Storage API verification failed${details ? `: ${details}` : "."}`,
       );
     }
-  } finally {
-    if (objectMayExist && ownerClient && objectPath) {
-      await ownerClient.storage.from(BUCKET_NAME).remove([objectPath]);
-    }
+  } catch (error) {
+    verificationError =
+      error instanceof Error ? error : new Error("Storage API test failed.");
+  }
 
-    for (const identity of identities.reverse()) {
-      await clerkRequest(clerkSecretKey, `/sessions/${identity.sessionId}/revoke`, {
-        method: "POST",
-      }).catch(() => null);
-      await clerkRequest(clerkSecretKey, `/users/${identity.userId}`, {
-        method: "DELETE",
-      });
-    }
+  const cleanupErrors = [];
+
+  for (const [index, object] of cleanupObjects.reverse().entries()) {
+    await runCleanupStep(
+      cleanupErrors,
+      `Storage object cleanup ${index + 1}`,
+      async () => {
+        const removal = await object.client.storage
+          .from(BUCKET_NAME)
+          .remove([object.path]);
+        if (removal.error) {
+          throw removal.error;
+        }
+
+        const remaining = await object.client.storage
+          .from(BUCKET_NAME)
+          .download(object.path);
+        if (!remaining.error || remaining.data) {
+          throw new Error("The object remained readable after cleanup.");
+        }
+      },
+    );
+  }
+
+  for (const [index, moment] of cleanupMoments.reverse().entries()) {
+    await runCleanupStep(
+      cleanupErrors,
+      `Moment cleanup ${index + 1}`,
+      async () => {
+        const deletion = await moment.client
+          .from("moments")
+          .delete()
+          .eq("id", moment.id)
+          .select("id");
+        if (deletion.error) {
+          throw deletion.error;
+        }
+        if (!deletion.data?.some((row) => row.id === moment.id)) {
+          throw new Error("The expected test Moment was not deleted.");
+        }
+      },
+    );
+  }
+
+  for (const [index, identity] of identities.reverse().entries()) {
+    await runCleanupStep(
+      cleanupErrors,
+      `Clerk session cleanup ${index + 1}`,
+      async () => {
+        await clerkRequest(
+          clerkSecretKey,
+          `/sessions/${identity.sessionId}/revoke`,
+          { method: "POST" },
+        );
+      },
+    );
+    await runCleanupStep(
+      cleanupErrors,
+      `Clerk user cleanup ${index + 1}`,
+      async () => {
+        await clerkRequest(clerkSecretKey, `/users/${identity.userId}`, {
+          method: "DELETE",
+        });
+      },
+    );
+  }
+
+  if (verificationError && cleanupErrors.length > 0) {
+    throw new AggregateError(
+      [verificationError, ...cleanupErrors],
+      `${verificationError.message} Cleanup also failed: ${cleanupErrors
+        .map((error) => error.message)
+        .join("; ")}`,
+    );
+  }
+
+  if (verificationError) {
+    throw verificationError;
+  }
+
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(
+      cleanupErrors,
+      `Storage API verification cleanup failed: ${cleanupErrors
+        .map((error) => error.message)
+        .join("; ")}`,
+    );
   }
 }
 

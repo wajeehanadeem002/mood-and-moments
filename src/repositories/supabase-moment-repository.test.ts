@@ -22,6 +22,7 @@ const row = {
   import_source: null,
   import_source_id: null,
   import_source_hash: null,
+  import_image_hash: null,
   created_at: "2026-08-29T04:15:30.000Z",
   updated_at: "2026-08-29T04:15:30.000Z",
 };
@@ -121,6 +122,8 @@ describe("SupabaseMomentRepository", () => {
         time: "9:15 AM",
       },
       imagePath: null,
+      importImageHash: null,
+      importSource: "legacy-localstorage-v1",
       sourceHash: "b".repeat(64),
       sourceId: "legacy-1",
     });
@@ -267,18 +270,29 @@ describe("SupabaseMomentRepository", () => {
         },
       },
       imagePath,
+      importImageHash: null,
+      importSource: null,
     });
   });
 
-  it("updates the image reference together with editable fields", async () => {
+  it("updates the image reference and server-computed import digest atomically", async () => {
     const imagePath = `${row.owner_id}/${row.id}/image`;
+    const importImageHash = "d".repeat(64);
     const { client, queries } = createSupabaseClientDouble({
-      data: { ...row, image_path: imagePath },
+      data: {
+        ...row,
+        image_path: imagePath,
+        import_image_hash: importImageHash,
+        import_source: "legacy-localstorage-v1",
+        import_source_id: "legacy-1",
+        import_source_hash: "c".repeat(64),
+        moment_time: "09:15:30",
+      },
       error: null,
     });
     const repository = new SupabaseMomentRepository(client);
 
-    await repository.updateWithImagePath(moment, imagePath);
+    await repository.updateWithImagePath(moment, imagePath, importImageHash);
 
     expect(queries[0]!.update).toHaveBeenCalledWith({
       title: moment.title,
@@ -286,8 +300,29 @@ describe("SupabaseMomentRepository", () => {
       mood: moment.mood,
       moment_date: "2026-08-29",
       image_path: imagePath,
+      import_image_hash: importImageHash,
     });
     expect(queries[0]!.eq).toHaveBeenCalledWith("id", row.id);
+  });
+
+  it("fails closed when an imported image digest is malformed", async () => {
+    const { client } = createSupabaseClientDouble({
+      data: {
+        ...row,
+        image_path: `${row.owner_id}/${row.id}/image`,
+        import_image_hash: "not-a-sha256",
+        import_source: "legacy-localstorage-v1",
+        import_source_id: "legacy-1",
+        import_source_hash: "c".repeat(64),
+        moment_time: "09:15:30",
+      },
+      error: null,
+    });
+    const repository = new SupabaseMomentRepository(client);
+
+    await expect(repository.findRecordById(row.id)).rejects.toBeInstanceOf(
+      MomentPersistenceError,
+    );
   });
 
   it("reports a missing or RLS-hidden update as not found", async () => {

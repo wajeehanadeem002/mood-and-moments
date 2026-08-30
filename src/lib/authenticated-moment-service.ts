@@ -1,5 +1,6 @@
 import type { Moment } from "@/data/moments";
 import type { MomentImageMutation } from "@/lib/moment-request-validation";
+import { sha256MomentImage } from "@/lib/moment-image-validation";
 import type {
   StoredMomentImage,
   SupabaseMomentImageRepository,
@@ -88,7 +89,7 @@ export class AuthenticatedMomentService {
 
     try {
       await this.images.upload(path, image);
-      return await this.moments.updateWithImagePath(created, path);
+      return await this.moments.updateWithImagePath(created, path, null);
     } catch (cause) {
       const cleanupFailures = await runCleanup([
         () => this.images.remove(path),
@@ -193,6 +194,10 @@ export class AuthenticatedMomentService {
     let objectMutationAttempted = false;
 
     try {
+      const importImageHash =
+        record.importSource === "legacy-localstorage-v1"
+          ? await sha256MomentImage(image)
+          : null;
       const updated = await this.moments.update(candidate);
       textUpdated = true;
       objectMutationAttempted = true;
@@ -203,7 +208,11 @@ export class AuthenticatedMomentService {
         await this.images.upload(path, image);
       }
 
-      return await this.moments.updateWithImagePath(updated, path);
+      return await this.moments.updateWithImagePath(
+        updated,
+        path,
+        importImageHash,
+      );
     } catch (cause) {
       const cleanupActions: Array<() => Promise<unknown>> = [];
 
@@ -217,7 +226,11 @@ export class AuthenticatedMomentService {
 
       if (textUpdated) {
         cleanupActions.push(() =>
-          this.moments.updateWithImagePath(record.moment, record.imagePath),
+          this.moments.updateWithImagePath(
+            record.moment,
+            record.imagePath,
+            record.importImageHash,
+          ),
         );
       }
 
@@ -236,7 +249,7 @@ export class AuthenticatedMomentService {
     candidate: Moment,
   ): Promise<Moment> {
     if (!record.imagePath) {
-      return this.moments.updateWithImagePath(candidate, null);
+      return this.moments.updateWithImagePath(candidate, null, null);
     }
 
     const path = this.requireStablePath(record);
@@ -250,7 +263,7 @@ export class AuthenticatedMomentService {
       removalAttempted = true;
       await this.images.remove(path);
 
-      return await this.moments.updateWithImagePath(updated, null);
+      return await this.moments.updateWithImagePath(updated, null, null);
     } catch (cause) {
       const cleanupActions: Array<() => Promise<unknown>> = [];
 
@@ -260,7 +273,11 @@ export class AuthenticatedMomentService {
 
       if (textUpdated) {
         cleanupActions.push(() =>
-          this.moments.updateWithImagePath(record.moment, record.imagePath),
+          this.moments.updateWithImagePath(
+            record.moment,
+            record.imagePath,
+            record.importImageHash,
+          ),
         );
       }
 

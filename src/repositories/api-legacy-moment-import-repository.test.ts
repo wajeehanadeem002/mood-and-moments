@@ -155,6 +155,28 @@ describe("ApiLegacyMomentImportRepository", () => {
     );
   });
 
+  it("accepts an explicit server image-mismatch result", async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      jsonResponse({
+        result: {
+          outcome: "image_mismatch",
+          imageOutcome: "mismatch",
+          sourceId: candidate.sourceId,
+          sourceHash: candidate.sourceHash,
+          moment,
+        },
+      }),
+    );
+    const repository = new ApiLegacyMomentImportRepository(
+      fetcher as typeof fetch,
+    );
+
+    await expect(repository.import(candidate)).resolves.toMatchObject({
+      outcome: "image_mismatch",
+      imageOutcome: "mismatch",
+    });
+  });
+
   it("fails closed on network and malformed success responses", async () => {
     const unavailable = new ApiLegacyMomentImportRepository(
       vi.fn().mockRejectedValue(new TypeError("offline")) as typeof fetch,
@@ -167,6 +189,23 @@ describe("ApiLegacyMomentImportRepository", () => {
       vi.fn().mockResolvedValue(jsonResponse({ result: {} })) as typeof fetch,
     );
     await expect(malformed.import(candidate)).rejects.toEqual(
+      expect.objectContaining({ code: "INVALID_RESPONSE" }),
+    );
+
+    const inconsistent = new ApiLegacyMomentImportRepository(
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          result: {
+            outcome: "already_imported",
+            imageOutcome: "mismatch",
+            sourceId: candidate.sourceId,
+            sourceHash: candidate.sourceHash,
+            moment,
+          },
+        }),
+      ) as typeof fetch,
+    );
+    await expect(inconsistent.import(candidate)).rejects.toEqual(
       expect.objectContaining({ code: "INVALID_RESPONSE" }),
     );
   });

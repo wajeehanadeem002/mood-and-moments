@@ -9,7 +9,7 @@ create temporary table tap_results (
 
 grant insert on table tap_results to anon, authenticated;
 
-select plan(32);
+select plan(43);
 
 insert into tap_results (test_number, result)
 select 1, has_table('public', 'moments', 'moments table exists');
@@ -464,6 +464,145 @@ select 32, ok(
     where id = '00000000-0000-0000-0000-00000000000a'
   ),
   'ordinary cloud moments keep their existing created_at time fallback metadata'
+);
+
+reset role;
+
+insert into tap_results (test_number, result)
+select 33, has_column(
+  'public',
+  'moments',
+  'import_image_hash',
+  'moments record the digest of imported image bytes'
+);
+
+insert into tap_results (test_number, result)
+select 34, ok(
+  (
+    select import_image_hash is null
+    from public.moments
+    where id = '00000000-0000-0000-0000-00000000000a'
+  ),
+  'ordinary cloud moments remain valid without an import image digest'
+);
+
+set local role authenticated;
+set local "request.jwt.claims" = '{"sub":"user_a","role":"authenticated"}';
+
+insert into tap_results (test_number, result)
+select 35, lives_ok(
+  $$
+    update public.moments
+    set
+      image_path = owner_id || '/' || id::text || '/image',
+      import_image_hash = repeat('d', 64)
+    where import_source_id = 'shared-local-id'
+  $$,
+  'an owner can atomically link an imported image and its byte digest'
+);
+
+insert into tap_results (test_number, result)
+select 36, is(
+  (
+    select import_image_hash
+    from public.moments
+    where import_source_id = 'shared-local-id'
+  ),
+  repeat('d', 64),
+  'the imported image digest is stored exactly'
+);
+
+insert into tap_results (test_number, result)
+select 37, throws_ok(
+  $$
+    update public.moments
+    set import_image_hash = 'caller-manufactured'
+    where import_source_id = 'shared-local-id'
+  $$,
+  '23514',
+  'new row for relation "moments" violates check constraint "moments_import_image_hash_complete"',
+  'malformed image digests are rejected'
+);
+
+insert into tap_results (test_number, result)
+select 38, throws_ok(
+  $$
+    update public.moments
+    set import_image_hash = null
+    where import_source_id = 'shared-local-id'
+  $$,
+  '23514',
+  'new row for relation "moments" violates check constraint "moments_import_image_hash_complete"',
+  'an imported image path cannot exist without its digest'
+);
+
+insert into tap_results (test_number, result)
+select 39, throws_ok(
+  $$
+    update public.moments
+    set image_path = null
+    where import_source_id = 'shared-local-id'
+  $$,
+  '23514',
+  'new row for relation "moments" violates check constraint "moments_import_image_hash_complete"',
+  'an imported image digest cannot exist without its image path'
+);
+
+insert into tap_results (test_number, result)
+select 40, throws_ok(
+  $$
+    update public.moments
+    set import_image_hash = repeat('e', 64)
+    where id = '00000000-0000-0000-0000-00000000000a'
+  $$,
+  '23514',
+  'new row for relation "moments" violates check constraint "moments_import_image_hash_complete"',
+  'ordinary cloud moments cannot manufacture legacy image metadata'
+);
+
+reset role;
+set local role authenticated;
+set local "request.jwt.claims" = '{"sub":"user_b","role":"authenticated"}';
+
+insert into tap_results (test_number, result)
+select 41, is(
+  (
+    select count(*)::integer
+    from public.moments
+    where title = 'Imported A moment'
+      and import_image_hash is not null
+  ),
+  0,
+  'another Clerk user cannot read imported image metadata'
+);
+
+insert into tap_results (test_number, result)
+select 42, results_eq(
+  $$
+    with updated as (
+      update public.moments
+      set import_image_hash = repeat('e', 64)
+      where title = 'Imported A moment'
+      returning id
+    )
+    select count(*)::bigint from updated
+  $$,
+  $$values (0::bigint)$$,
+  'another Clerk user cannot modify imported image metadata'
+);
+
+reset role;
+set local role authenticated;
+set local "request.jwt.claims" = '{"sub":"user_a","role":"authenticated"}';
+
+insert into tap_results (test_number, result)
+select 43, lives_ok(
+  $$
+    update public.moments
+    set image_path = null, import_image_hash = null
+    where import_source_id = 'shared-local-id'
+  $$,
+  'an owner can atomically remove an imported image and its digest'
 );
 
 reset role;

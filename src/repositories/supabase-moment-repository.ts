@@ -12,9 +12,10 @@ type MomentRow = {
   moment_date: string;
   moment_time: string | null;
   image_path: string | null;
-  import_source: string | null;
+  import_source: "legacy-localstorage-v1" | null;
   import_source_id: string | null;
   import_source_hash: string | null;
+  import_image_hash: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -22,6 +23,8 @@ type MomentRow = {
 export type StoredMomentRecord = {
   moment: Moment;
   imagePath: string | null;
+  importImageHash: string | null;
+  importSource: "legacy-localstorage-v1" | null;
 };
 
 export type StoredImportedMomentRecord = StoredMomentRecord & {
@@ -41,6 +44,7 @@ const momentColumns = [
   "import_source",
   "import_source_id",
   "import_source_hash",
+  "import_image_hash",
   "created_at",
   "updated_at",
 ].join(",");
@@ -90,14 +94,21 @@ function isMomentRow(value: unknown): value is MomentRow {
     candidate.moment_time === null &&
     candidate.import_source === null &&
     candidate.import_source_id === null &&
-    candidate.import_source_hash === null;
+    candidate.import_source_hash === null &&
+    candidate.import_image_hash === null;
+  const hasConsistentLegacyImageMetadata =
+    (candidate.image_path === null && candidate.import_image_hash === null) ||
+    (isNonEmptyString(candidate.image_path) &&
+      typeof candidate.import_image_hash === "string" &&
+      /^[a-f0-9]{64}$/.test(candidate.import_image_hash));
   const hasLegacyImportMetadata =
     typeof candidate.moment_time === "string" &&
     /^\d{2}:\d{2}:\d{2}$/.test(candidate.moment_time) &&
     candidate.import_source === "legacy-localstorage-v1" &&
     isNonEmptyString(candidate.import_source_id) &&
     typeof candidate.import_source_hash === "string" &&
-    /^[a-f0-9]{64}$/.test(candidate.import_source_hash);
+    /^[a-f0-9]{64}$/.test(candidate.import_source_hash) &&
+    hasConsistentLegacyImageMetadata;
 
   return (
     isNonEmptyString(candidate.id) &&
@@ -164,7 +175,12 @@ function mapStoredMomentRow(value: unknown): StoredMomentRecord {
     );
   }
 
-  return { moment: mapMomentRow(value), imagePath: value.image_path };
+  return {
+    moment: mapMomentRow(value),
+    imagePath: value.image_path,
+    importImageHash: value.import_image_hash,
+    importSource: value.import_source,
+  };
 }
 
 function mapImportedMomentRow(value: unknown): StoredImportedMomentRecord {
@@ -308,13 +324,15 @@ export class SupabaseMomentRepository implements MomentRepository {
   async updateWithImagePath(
     moment: Moment,
     imagePath: string | null,
+    importImageHash: string | null,
   ): Promise<Moment> {
-    return this.updateRow(moment, imagePath);
+    return this.updateRow(moment, imagePath, importImageHash);
   }
 
   private async updateRow(
     moment: Moment,
     imagePath?: string | null,
+    importImageHash?: string | null,
   ): Promise<Moment> {
     const { data, error } = await this.client
       .from("moments")
@@ -324,6 +342,9 @@ export class SupabaseMomentRepository implements MomentRepository {
         mood: moment.mood,
         moment_date: moment.dateTime.slice(0, 10),
         ...(imagePath !== undefined ? { image_path: imagePath } : {}),
+        ...(importImageHash !== undefined
+          ? { import_image_hash: importImageHash }
+          : {}),
       })
       .eq("id", moment.id)
       .select(momentColumns)
@@ -364,6 +385,7 @@ export class SupabaseMomentRepository implements MomentRepository {
       .eq("id", id)
       .eq("import_source", "legacy-localstorage-v1")
       .is("image_path", null)
+      .is("import_image_hash", null)
       .select("id")
       .maybeSingle();
 

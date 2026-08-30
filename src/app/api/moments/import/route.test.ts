@@ -26,7 +26,10 @@ const savedMoment: Moment = {
   excerpt: "The room felt peaceful.",
 };
 
-function formRequest(withImage = false) {
+function formRequest(
+  withImage = false,
+  mutate?: (form: FormData) => void,
+) {
   const form = new FormData();
   form.set("sourceId", "legacy-1");
   form.set("title", "A quiet beginning");
@@ -44,6 +47,7 @@ function formRequest(withImage = false) {
       ),
     );
   }
+  mutate?.(form);
   const request = new Request("http://localhost/api/moments/import", {
     headers: { "content-type": "multipart/form-data; boundary=test" },
     method: "POST",
@@ -145,6 +149,23 @@ describe("POST /api/moments/import", () => {
     expect(response.status).toBe(200);
   });
 
+  it("returns an image mismatch as an explicit non-created result", async () => {
+    importMoment.mockResolvedValue({
+      outcome: "image_mismatch",
+      imageOutcome: "mismatch",
+      sourceId: "legacy-1",
+      sourceHash:
+        "f3a1420b514b3e08de201fb0041856c68f96cf0469a3781ba5e20933997e5f63",
+      moment: savedMoment,
+    });
+
+    const response = await POST(formRequest(true));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      result: { outcome: "image_mismatch", imageOutcome: "mismatch" },
+    });
+  });
+
   it("returns a conflict without modifying an existing import", async () => {
     importMoment.mockRejectedValue(new LegacyImportSourceConflictError());
 
@@ -157,5 +178,20 @@ describe("POST /api/moments/import", () => {
         message: "This legacy Moment changed after it was imported.",
       },
     });
+  });
+
+  it("rejects a caller-supplied import image digest", async () => {
+    const response = await POST(
+      formRequest(true, (form) => form.set("import_image_hash", "a".repeat(64))),
+    );
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: "VALIDATION_ERROR",
+        fields: { request: expect.any(String) },
+      },
+    });
+    expect(importMoment).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { validateMomentImageFile } from "./moment-image-validation";
+import {
+  sha256MomentImage,
+  validateMomentImageFile,
+} from "./moment-image-validation";
 
 const signatures = {
   jpeg: [0xff, 0xd8, 0xff, 0xe0],
@@ -62,5 +65,15 @@ describe("validateMomentImageFile", () => {
       success: false,
       error: "The image contents do not match its file type.",
     });
+  });
+});
+
+describe("sha256MomentImage", () => {
+  it("hashes the exact image bytes with SHA-256", async () => {
+    const image = imageFile([...signatures.png, 0x41], "image/png");
+
+    await expect(sha256MomentImage(image)).resolves.toBe(
+      "7133ad08284317968ef1cba3f0914e04eae6eeafc11156c01b55aef10ba07380",
+    );
   });
 });

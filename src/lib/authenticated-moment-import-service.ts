@@ -1,4 +1,5 @@
 import type { Moment } from "@/data/moments";
+import { sha256MomentImage } from "@/lib/moment-image-validation";
 import type { SupabaseMomentImageRepository } from "@/repositories/supabase-moment-image-repository";
 import {
   MomentImportConflictError,
@@ -8,13 +9,13 @@ import {
 
 type ImportMomentStore = Pick<
   SupabaseMomentRepository,
-  | "createImported"
-  | "deleteIncompleteImport"
-  | "findImportRecord"
-  | "updateWithImagePath"
+  "createImported" | "findImportRecord" | "updateWithImagePath"
 >;
 
-type ImportImageStore = Pick<SupabaseMomentImageRepository, "remove" | "upsert">;
+type ImportImageStore = Pick<
+  SupabaseMomentImageRepository,
+  "download" | "upload"
+>;
 
 type Pause = (milliseconds: number) => Promise<void>;
 
@@ -31,8 +32,16 @@ export type LegacyMomentImportSource = {
 };
 
 export type LegacyMomentImportOutcome = {
-  outcome: "created" | "already_imported" | "completed_existing";
-  imageOutcome: "uploaded" | "already_present" | "not_provided";
+  outcome:
+    | "created"
+    | "already_imported"
+    | "completed_existing"
+    | "image_mismatch";
+  imageOutcome:
+    | "uploaded"
+    | "already_present"
+    | "not_provided"
+    | "mismatch";
   sourceId: string;
   sourceHash: string;
   moment: Moment;
@@ -104,65 +113,74 @@ export class AuthenticatedMomentImportService {
       );
     }
 
+    const imageHash = await sha256MomentImage(image);
+
     if (record.imagePath) {
-      return this.outcome(
-        record,
-        source,
-        "already_imported",
-        "already_present",
-      );
+      return await this.confirmExistingImage(record, source, imageHash);
     }
 
     const path = stableImagePath(this.userId, record.moment.id);
+    let imageOutcome: LegacyMomentImportOutcome["imageOutcome"] = "uploaded";
+
     try {
-      await this.images.upsert(path, image);
-      const saved = await this.moments.updateWithImagePath(record.moment, path);
+      await this.images.upload(path, image);
+    } catch (uploadCause) {
+      try {
+        const storedImage = await this.images.download(path);
+        const storedImageHash = await sha256MomentImage(storedImage.body);
+
+        if (storedImageHash !== imageHash) {
+          return this.outcome(
+            record,
+            source,
+            "image_mismatch",
+            "mismatch",
+          );
+        }
+
+        imageOutcome = "already_present";
+      } catch (downloadCause) {
+        const latest = await this.waitForConcurrentImageCompletion(source);
+        if (latest?.imagePath) {
+          return await this.confirmExistingImage(latest, source, imageHash);
+        }
+
+        throw new MomentImportLifecycleError(
+          "Legacy Moment image persistence could not complete and remains available for retry.",
+          [downloadCause],
+          { cause: uploadCause },
+        );
+      }
+    }
+
+    try {
+      const saved = await this.moments.updateWithImagePath(
+        record.moment,
+        path,
+        imageHash,
+      );
       return {
         outcome: created ? "created" : "completed_existing",
-        imageOutcome: "uploaded",
+        imageOutcome,
         sourceId: source.sourceId,
         sourceHash: source.sourceHash,
         moment: saved,
       };
     } catch (cause) {
       const cleanupFailures: unknown[] = [];
-      let rowRemoved = false;
       let latest: StoredImportedMomentRecord | null | undefined;
 
       try {
         latest = await this.waitForConcurrentImageCompletion(source);
         if (latest?.imagePath) {
-          return this.outcome(
-            latest,
-            source,
-            "already_imported",
-            "already_present",
-          );
+          return await this.confirmExistingImage(latest, source, imageHash);
         }
       } catch (error) {
         cleanupFailures.push(error);
       }
 
-      if (created) {
-        try {
-          rowRemoved = await this.moments.deleteIncompleteImport(
-            record.moment.id,
-          );
-        } catch (error) {
-          cleanupFailures.push(error);
-        }
-      }
-
-      if (rowRemoved || latest === null) {
-        try {
-          await this.images.remove(path);
-        } catch (error) {
-          cleanupFailures.push(error);
-        }
-      }
-
       throw new MomentImportLifecycleError(
-        "Legacy Moment image persistence could not complete and was rolled back.",
+        "Legacy Moment image persistence could not complete and remains available for retry.",
         cleanupFailures,
         { cause },
       );
@@ -196,6 +214,36 @@ export class AuthenticatedMomentImportService {
     if (record.sourceHash !== sourceHash) {
       throw new LegacyImportSourceConflictError();
     }
+  }
+
+  private async confirmExistingImage(
+    record: StoredImportedMomentRecord,
+    source: LegacyMomentImportSource,
+    suppliedImageHash: string,
+  ): Promise<LegacyMomentImportOutcome> {
+    const expectedPath = stableImagePath(this.userId, record.moment.id);
+    if (record.imagePath !== expectedPath) {
+      throw new MomentImportLifecycleError(
+        "The stored imported Moment image reference is invalid.",
+      );
+    }
+
+    const storedImage = await this.images.download(expectedPath);
+    const storedImageHash = await sha256MomentImage(storedImage.body);
+
+    if (
+      record.importImageHash !== suppliedImageHash ||
+      storedImageHash !== suppliedImageHash
+    ) {
+      return this.outcome(record, source, "image_mismatch", "mismatch");
+    }
+
+    return this.outcome(
+      record,
+      source,
+      "already_imported",
+      "already_present",
+    );
   }
 
   private outcome(

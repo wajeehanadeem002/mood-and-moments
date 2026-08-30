@@ -2,8 +2,16 @@ import type { Moment } from "@/data/moments";
 import type { LegacyImportCandidate } from "@/lib/legacy-moment-import";
 
 export type LegacyMomentImportApiResult = {
-  outcome: "created" | "already_imported" | "completed_existing";
-  imageOutcome: "uploaded" | "already_present" | "not_provided";
+  outcome:
+    | "created"
+    | "already_imported"
+    | "completed_existing"
+    | "image_mismatch";
+  imageOutcome:
+    | "uploaded"
+    | "already_present"
+    | "not_provided"
+    | "mismatch";
   sourceId: string;
   sourceHash: string;
   moment: Moment;
@@ -81,13 +89,22 @@ function isErrorBody(value: unknown): value is ApiErrorBody {
 function isResult(value: unknown): value is LegacyMomentImportApiResult {
   if (!value || typeof value !== "object") return false;
   const result = value as Record<string, unknown>;
+  const hasConsistentImageOutcome =
+    (result.outcome === "image_mismatch" &&
+      result.imageOutcome === "mismatch") ||
+    (result.outcome !== "image_mismatch" &&
+      result.imageOutcome !== "mismatch");
+
   return (
     (result.outcome === "created" ||
       result.outcome === "already_imported" ||
-      result.outcome === "completed_existing") &&
+      result.outcome === "completed_existing" ||
+      result.outcome === "image_mismatch") &&
     (result.imageOutcome === "uploaded" ||
       result.imageOutcome === "already_present" ||
-      result.imageOutcome === "not_provided") &&
+      result.imageOutcome === "not_provided" ||
+      result.imageOutcome === "mismatch") &&
+    hasConsistentImageOutcome &&
     isNonEmptyString(result.sourceId) &&
     /^[a-f0-9]{64}$/.test(String(result.sourceHash)) &&
     isMoment(result.moment)

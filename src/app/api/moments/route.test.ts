@@ -26,6 +26,7 @@ const row = {
   import_source: null,
   import_source_id: null,
   import_source_hash: null,
+  import_image_hash: null,
   image_path: null,
   created_at: "2026-08-29T04:15:30.000Z",
   updated_at: "2026-08-29T04:15:30.000Z",
