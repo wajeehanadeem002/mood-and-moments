@@ -29,11 +29,14 @@ Configure these application variables in the repository-root `.env.local` file f
 ```bash
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=
 CLERK_SECRET_KEY=
+CLERK_AUTHORIZED_PARTIES=http://localhost:3000,http://127.0.0.1:3000
 SUPABASE_URL=
 SUPABASE_PUBLISHABLE_KEY=
 ```
 
 `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` are intentionally server-only. Normal user operations must not use a Supabase secret or service-role key because those credentials bypass Row Level Security.
+
+`CLERK_AUTHORIZED_PARTIES` is a server-only, non-secret comma-separated allowlist of exact application origins used to validate Clerk's session-token `azp` claim. Wildcards, public HTTP origins, credentials, paths, queries, and fragments are rejected. When the variable is absent, the proxy permits only `http://localhost:3000` and `http://127.0.0.1:3000`; every deployed environment must set its own exact HTTPS origin before it can authenticate users.
 
 Complete the native provider connection before exercising authenticated Supabase requests:
 
