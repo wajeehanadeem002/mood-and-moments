@@ -48,7 +48,7 @@ pnpm exec supabase start
 pnpm test:db
 ```
 
-Authenticated Moment CRUD now uses server-mediated Route Handlers, the RLS-backed Supabase PostgreSQL repository, and private Supabase Storage image lifecycle through an authenticated same-origin image proxy. Existing browser-local Moments remain untouched; localStorage import or migration is intentionally deferred to a later approved milestone.
+Authenticated Moment CRUD uses server-mediated Route Handlers, the RLS-backed Supabase PostgreSQL repository, and private Supabase Storage image lifecycle through an authenticated same-origin image proxy. Signed-in users may explicitly review and import legacy Moments from `mood-and-moments.moments.v1`; the app never reads that source on sign-in and never removes local records without a separate confirmation. Durable owner-scoped import identity makes retries safe, while malformed, failed, conflicted, changed, or image-incomplete records remain local for review.
 
 ## Learn More
 

@@ -30,6 +30,27 @@ const path = "user_a/00000000-0000-4000-8000-000000000001/image";
 const image = new File(["new image"], "memory.png", { type: "image/png" });
 
 describe("SupabaseMomentImageRepository", () => {
+  it("upserts an owner-scoped import image for retry reconciliation", async () => {
+    const upload = vi.fn().mockResolvedValue({ data: { path }, error: null });
+    const client = {
+      storage: { from: vi.fn(() => ({ upload })) },
+    } as unknown as SupabaseClient;
+    const repository = new SupabaseMomentImageRepository(client);
+    const image = new File(
+      [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+      "legacy.png",
+      { type: "image/png" },
+    );
+
+    await repository.upsert(path, image);
+
+    expect(upload).toHaveBeenCalledWith(path, image, {
+      cacheControl: "3600",
+      contentType: "image/png",
+      upsert: true,
+    });
+  });
+
   it("uploads to the private bucket without path mutation", async () => {
     const { bucket, client, from } = createStorageDouble();
     const repository = new SupabaseMomentImageRepository(client);

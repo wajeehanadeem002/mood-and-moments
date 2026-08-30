@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { Hero } from "@/components/home/hero";
+import { LegacyMomentImport } from "@/components/home/legacy-moment-import";
 import { MemoryTimeline } from "@/components/home/memory-timeline";
 import { RecentMoments } from "@/components/home/recent-moments";
 import {
@@ -48,6 +49,7 @@ export function MomentsExperience() {
       key={sessionKey}
       isAuthenticated={isAuthenticated}
       isAuthenticationLoading={!isLoaded}
+      userId={isAuthenticated ? userId! : null}
       onRequireAuthentication={() => router.push("/sign-in")}
     />
   );
@@ -56,12 +58,14 @@ export function MomentsExperience() {
 type MomentsExperienceSessionProps = {
   isAuthenticated: boolean;
   isAuthenticationLoading: boolean;
+  userId: string | null;
   onRequireAuthentication: () => void;
 };
 
 function MomentsExperienceSession({
   isAuthenticated,
   isAuthenticationLoading,
+  userId,
   onRequireAuthentication,
 }: MomentsExperienceSessionProps) {
   const repositoryRef = useRef<MomentRepository | null>(null);
@@ -211,6 +215,18 @@ function MomentsExperienceSession({
     });
   }
 
+  function handleImportedMoment(moment: Moment) {
+    if (staticMomentIds.has(moment.id)) return;
+    setSavedMoments((current) => {
+      const existing = current.some((candidate) => candidate.id === moment.id);
+      return existing
+        ? current.map((candidate) =>
+            candidate.id === moment.id ? moment : candidate,
+          )
+        : [moment, ...current];
+    });
+  }
+
   const editingMoment = editingMomentId
     ? (savedMoments.find((moment) => moment.id === editingMomentId) ?? null)
     : null;
@@ -238,6 +254,12 @@ function MomentsExperienceSession({
         onCancelEdit={() => setEditingMomentId(null)}
         onRequireAuthentication={onRequireAuthentication}
       />
+      {isAuthenticated && userId ? (
+        <LegacyMomentImport
+          userId={userId}
+          onImportedMoment={handleImportedMoment}
+        />
+      ) : null}
       <RecentMoments
         moments={displayedRecentMoments}
         editableMomentIds={editableMomentIds}

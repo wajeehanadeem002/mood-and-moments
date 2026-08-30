@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { MomentImageLifecycleError } from "@/lib/authenticated-moment-service";
+import { MomentImportLifecycleError } from "@/lib/authenticated-moment-import-service";
 
 import { handleMomentApiError } from "./moment-api-server";
 
@@ -30,5 +31,27 @@ describe("handleMomentApiError", () => {
       },
     });
     expect(JSON.stringify(body)).not.toContain("private provider detail");
+  });
+
+  it("logs incomplete import compensation without exposing provider details", async () => {
+    const cleanupFailure = new Error("private import cleanup detail");
+    const error = new MomentImportLifecycleError(
+      "Legacy Moment image persistence could not complete.",
+      [cleanupFailure],
+    );
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    const response = handleMomentApiError(error);
+
+    expect(consoleError).toHaveBeenCalledWith(
+      "Moment image compensation cleanup did not complete.",
+      error,
+    );
+    expect(response.status).toBe(500);
+    expect(JSON.stringify(await response.json())).not.toContain(
+      "private import cleanup detail",
+    );
   });
 });

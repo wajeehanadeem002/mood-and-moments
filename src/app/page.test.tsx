@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Moment } from "@/data/moments";
 import { recentMoments } from "@/data/moments";
+import {
+  canonicalLegacyMomentValue,
+  sha256Text,
+} from "@/lib/legacy-moment-import";
+import { LEGACY_MOMENTS_STORAGE_KEY } from "@/repositories/local-storage-legacy-moment-source";
 import { MOMENTS_STORAGE_KEY } from "@/repositories/local-storage-moment-repository";
 import { setClerkTestAuthState } from "@/test/clerk-test-state";
 
@@ -111,6 +116,45 @@ function installMomentApi() {
         const moment = momentFromInput(input, undefined, imageAction);
         apiMoments = [moment, ...apiMoments];
         return jsonResponse({ moment }, 201);
+      }
+
+      if (url === "/api/moments/import" && method === "POST") {
+        const form = init?.body as FormData;
+        const importedInput: ApiMomentInput = {
+          title: String(form.get("title")),
+          description: String(form.get("description")),
+          mood: String(form.get("mood")) as Moment["mood"],
+          date: String(form.get("date")),
+        };
+        const sourceId = String(form.get("sourceId"));
+        const time = String(form.get("time"));
+        const moment = momentFromInput(importedInput, undefined, "keep");
+        moment.dateTime = `${importedInput.date}T${time}`;
+        moment.time = new Intl.DateTimeFormat("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          timeZone: "UTC",
+        }).format(new Date(`${importedInput.date}T${time}Z`));
+        apiMoments = [moment, ...apiMoments];
+        const sourceHash = await sha256Text(
+          canonicalLegacyMomentValue({
+            sourceId,
+            ...importedInput,
+            time,
+          }),
+        );
+        return jsonResponse(
+          {
+            result: {
+              outcome: "created",
+              imageOutcome: "not_provided",
+              sourceId,
+              sourceHash,
+              moment,
+            },
+          },
+          201,
+        );
       }
 
       const id = decodeURIComponent(url.replace("/api/moments/", ""));
@@ -518,6 +562,44 @@ describe("Mood & Moments homepage", () => {
     );
   });
 
+  it("imports a reviewed legacy Moment into both views and reloads it from the cloud API", async () => {
+    window.localStorage.setItem(
+      LEGACY_MOMENTS_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: "legacy-rain",
+          date: "Aug 21, 2026",
+          dateTime: "2026-08-21T17:42:00Z",
+          time: "5:42 PM",
+          mood: "calm",
+          title: "Rain from the old journal",
+          excerpt: "A local Moment chosen for cloud import.",
+        },
+      ]),
+    );
+    const firstRender = render(<Home />);
+    await waitForCloudReady();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review legacy Moments" }),
+    );
+    await screen.findByText("1 ready to import");
+    fireEvent.click(screen.getByRole("button", { name: "Import 1 Moment" }));
+
+    expect(
+      await screen.findByText("1 imported, 0 failed, 0 skipped."),
+    ).not.toBeNull();
+    expect(screen.getAllByText("Rain from the old journal")).toHaveLength(3);
+    expect(window.localStorage.getItem(LEGACY_MOMENTS_STORAGE_KEY)).not.toBeNull();
+
+    firstRender.unmount();
+    render(<Home />);
+
+    expect(
+      await screen.findAllByText("Rain from the old journal"),
+    ).toHaveLength(2);
+  });
+
   it("keeps the homepage usable when the authenticated API cannot load", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(
@@ -564,6 +646,9 @@ describe("Mood & Moments homepage", () => {
     expect(screen.queryByRole("button", { name: /^Delete / })).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(storageRead).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: "Review legacy Moments" }),
+    ).toBeNull();
   });
 
   it("directs signed-out Moment creation to sign-in without API or storage access", async () => {

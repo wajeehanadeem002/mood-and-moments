@@ -45,6 +45,24 @@ export class SupabaseMomentImageRepository {
     }
   }
 
+  async upsert(
+    path: string,
+    body: Blob,
+    contentType = body.type,
+  ): Promise<void> {
+    const { error } = await this.client.storage
+      .from(MOMENT_IMAGES_BUCKET)
+      .upload(path, body, {
+        cacheControl: "3600",
+        contentType,
+        upsert: true,
+      });
+
+    if (error) {
+      persistenceError("upsert", error);
+    }
+  }
+
   async replace(
     path: string,
     body: Blob,

@@ -2,6 +2,11 @@ import {
   AuthenticatedMomentService,
   MomentImageLifecycleError,
 } from "@/lib/authenticated-moment-service";
+import {
+  AuthenticatedMomentImportService,
+  LegacyImportSourceConflictError,
+  MomentImportLifecycleError,
+} from "@/lib/authenticated-moment-import-service";
 import { createAuthenticatedSupabaseClient, SupabaseAuthenticationError } from "@/lib/supabase/server";
 import { SupabaseMomentImageRepository } from "@/repositories/supabase-moment-image-repository";
 import {
@@ -14,6 +19,7 @@ type ApiErrorCode =
   | "INVALID_ID"
   | "INVALID_FORM_DATA"
   | "INVALID_JSON"
+  | "IMPORT_SOURCE_CONFLICT"
   | "NOT_FOUND"
   | "UNAUTHORIZED"
   | "VALIDATION_ERROR";
@@ -28,6 +34,16 @@ export async function createAuthenticatedMomentService() {
   const { client, userId } = await createAuthenticatedSupabaseClient();
 
   return new AuthenticatedMomentService(
+    new SupabaseMomentRepository(client),
+    new SupabaseMomentImageRepository(client),
+    userId,
+  );
+}
+
+export async function createAuthenticatedMomentImportService() {
+  const { client, userId } = await createAuthenticatedSupabaseClient();
+
+  return new AuthenticatedMomentImportService(
     new SupabaseMomentRepository(client),
     new SupabaseMomentImageRepository(client),
     userId,
@@ -68,8 +84,17 @@ export function handleMomentApiError(error: unknown): Response {
     return errorResponse(404, "NOT_FOUND", "Moment not found.");
   }
 
+  if (error instanceof LegacyImportSourceConflictError) {
+    return errorResponse(
+      409,
+      "IMPORT_SOURCE_CONFLICT",
+      "This legacy Moment changed after it was imported.",
+    );
+  }
+
   if (
-    error instanceof MomentImageLifecycleError &&
+    (error instanceof MomentImageLifecycleError ||
+      error instanceof MomentImportLifecycleError) &&
     error.cleanupFailures.length > 0
   ) {
     console.error(

@@ -4,6 +4,7 @@ import type { Moment } from "@/data/moments";
 import { createSupabaseClientDouble } from "@/test/supabase-query-double";
 
 import {
+  MomentImportConflictError,
   MomentNotFoundError,
   MomentPersistenceError,
   SupabaseMomentRepository,
@@ -16,7 +17,11 @@ const row = {
   description: "Sunlight crossed the room.",
   mood: "calm",
   moment_date: "2026-08-29",
+  moment_time: null,
   image_path: null,
+  import_source: null,
+  import_source_id: null,
+  import_source_hash: null,
   created_at: "2026-08-29T04:15:30.000Z",
   updated_at: "2026-08-29T04:15:30.000Z",
 };
@@ -70,6 +75,109 @@ describe("SupabaseMomentRepository", () => {
         },
       },
     ]);
+  });
+
+  it("preserves an imported Moment time instead of using created_at", async () => {
+    const importedRow = {
+      ...row,
+      moment_time: "09:15:30",
+      import_source: "legacy-localstorage-v1",
+      import_source_id: "legacy-1",
+      import_source_hash: "a".repeat(64),
+    };
+    const { client } = createSupabaseClientDouble({
+      data: [importedRow],
+      error: null,
+    });
+    const repository = new SupabaseMomentRepository(client);
+
+    await expect(repository.list()).resolves.toEqual([
+      {
+        ...moment,
+        dateTime: "2026-08-29T09:15:30",
+        time: "9:15 AM",
+      },
+    ]);
+  });
+
+  it("finds an owner-scoped imported record by immutable source identity", async () => {
+    const importedRow = {
+      ...row,
+      moment_time: "09:15:30",
+      import_source: "legacy-localstorage-v1",
+      import_source_id: "legacy-1",
+      import_source_hash: "b".repeat(64),
+    };
+    const { client, queries } = createSupabaseClientDouble({
+      data: importedRow,
+      error: null,
+    });
+    const repository = new SupabaseMomentRepository(client);
+
+    await expect(repository.findImportRecord("legacy-1")).resolves.toEqual({
+      moment: {
+        ...moment,
+        dateTime: "2026-08-29T09:15:30",
+        time: "9:15 AM",
+      },
+      imagePath: null,
+      sourceHash: "b".repeat(64),
+      sourceId: "legacy-1",
+    });
+    expect(queries[0]!.eq).toHaveBeenNthCalledWith(
+      1,
+      "import_source",
+      "legacy-localstorage-v1",
+    );
+    expect(queries[0]!.eq).toHaveBeenNthCalledWith(2, "import_source_id", "legacy-1");
+  });
+
+  it("creates an imported row with server-normalized source metadata and time", async () => {
+    const importedRow = {
+      ...row,
+      moment_time: "09:15:30",
+      import_source: "legacy-localstorage-v1",
+      import_source_id: "legacy-1",
+      import_source_hash: "c".repeat(64),
+    };
+    const { client, queries } = createSupabaseClientDouble({
+      data: importedRow,
+      error: null,
+    });
+    const repository = new SupabaseMomentRepository(client);
+
+    await repository.createImported(moment, {
+      sourceHash: "c".repeat(64),
+      sourceId: "legacy-1",
+      time: "09:15:30",
+    });
+
+    expect(queries[0]!.insert).toHaveBeenCalledWith({
+      title: moment.title,
+      description: moment.excerpt,
+      mood: moment.mood,
+      moment_date: "2026-08-29",
+      moment_time: "09:15:30",
+      import_source: "legacy-localstorage-v1",
+      import_source_id: "legacy-1",
+      import_source_hash: "c".repeat(64),
+    });
+  });
+
+  it("identifies a concurrent idempotency conflict without exposing database details", async () => {
+    const { client } = createSupabaseClientDouble({
+      data: null,
+      error: { code: "23505", message: "unique index details" },
+    });
+    const repository = new SupabaseMomentRepository(client);
+
+    await expect(
+      repository.createImported(moment, {
+        sourceHash: "c".repeat(64),
+        sourceId: "legacy-1",
+        time: "09:15:30",
+      }),
+    ).rejects.toBeInstanceOf(MomentImportConflictError);
   });
 
   it("creates a Moment without caller-controlled identity, id, or image data", async () => {
@@ -207,6 +315,26 @@ describe("SupabaseMomentRepository", () => {
     const query = queries[0]!;
     expect(query.delete).toHaveBeenCalledOnce();
     expect(query.eq).toHaveBeenCalledWith("id", row.id);
+  });
+
+  it("deletes import compensation only while its image is still unlinked", async () => {
+    const { client, queries } = createSupabaseClientDouble({
+      data: { id: row.id },
+      error: null,
+    });
+    const repository = new SupabaseMomentRepository(client);
+
+    await expect(
+      repository.deleteIncompleteImport(row.id),
+    ).resolves.toBe(true);
+    expect(queries[0]!.delete).toHaveBeenCalledOnce();
+    expect(queries[0]!.eq).toHaveBeenNthCalledWith(1, "id", row.id);
+    expect(queries[0]!.eq).toHaveBeenNthCalledWith(
+      2,
+      "import_source",
+      "legacy-localstorage-v1",
+    );
+    expect(queries[0]!.is).toHaveBeenCalledWith("image_path", null);
   });
 
   it("converts Supabase failures into a typed persistence error", async () => {

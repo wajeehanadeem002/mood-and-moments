@@ -13,6 +13,7 @@ export function createSupabaseClientDouble(
     delete: ReturnType<typeof vi.fn>;
     eq: ReturnType<typeof vi.fn>;
     insert: ReturnType<typeof vi.fn>;
+    is: ReturnType<typeof vi.fn>;
     maybeSingle: ReturnType<typeof vi.fn>;
     order: ReturnType<typeof vi.fn>;
     select: ReturnType<typeof vi.fn>;
@@ -28,6 +29,7 @@ export function createSupabaseClientDouble(
       delete: vi.fn(),
       eq: vi.fn(),
       insert: vi.fn(),
+      is: vi.fn(),
       maybeSingle: vi.fn(async () => result),
       order: vi.fn(),
       select: vi.fn(),
@@ -42,6 +44,7 @@ export function createSupabaseClientDouble(
     query.delete.mockReturnValue(query);
     query.eq.mockReturnValue(query);
     query.insert.mockReturnValue(query);
+    query.is.mockReturnValue(query);
     query.order.mockReturnValue(query);
     query.select.mockReturnValue(query);
     query.update.mockReturnValue(query);

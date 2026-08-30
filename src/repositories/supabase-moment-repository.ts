@@ -10,7 +10,11 @@ type MomentRow = {
   description: string;
   mood: Moment["mood"];
   moment_date: string;
+  moment_time: string | null;
   image_path: string | null;
+  import_source: string | null;
+  import_source_id: string | null;
+  import_source_hash: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -20,6 +24,11 @@ export type StoredMomentRecord = {
   imagePath: string | null;
 };
 
+export type StoredImportedMomentRecord = StoredMomentRecord & {
+  sourceId: string;
+  sourceHash: string;
+};
+
 const momentColumns = [
   "id",
   "owner_id",
@@ -27,7 +36,11 @@ const momentColumns = [
   "description",
   "mood",
   "moment_date",
+  "moment_time",
   "image_path",
+  "import_source",
+  "import_source_id",
+  "import_source_hash",
   "created_at",
   "updated_at",
 ].join(",");
@@ -45,6 +58,13 @@ export class MomentNotFoundError extends Error {
   constructor() {
     super("Moment not found.");
     this.name = "MomentNotFoundError";
+  }
+}
+
+export class MomentImportConflictError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("The legacy Moment source already exists.", options);
+    this.name = "MomentImportConflictError";
   }
 }
 
@@ -66,6 +86,19 @@ function isMomentRow(value: unknown): value is MomentRow {
 
   const candidate = value as Record<string, unknown>;
 
+  const hasNormalImportMetadata =
+    candidate.moment_time === null &&
+    candidate.import_source === null &&
+    candidate.import_source_id === null &&
+    candidate.import_source_hash === null;
+  const hasLegacyImportMetadata =
+    typeof candidate.moment_time === "string" &&
+    /^\d{2}:\d{2}:\d{2}$/.test(candidate.moment_time) &&
+    candidate.import_source === "legacy-localstorage-v1" &&
+    isNonEmptyString(candidate.import_source_id) &&
+    typeof candidate.import_source_hash === "string" &&
+    /^[a-f0-9]{64}$/.test(candidate.import_source_hash);
+
   return (
     isNonEmptyString(candidate.id) &&
     isNonEmptyString(candidate.owner_id) &&
@@ -75,6 +108,7 @@ function isMomentRow(value: unknown): value is MomentRow {
     allowedMoods.has(candidate.mood as Moment["mood"]) &&
     typeof candidate.moment_date === "string" &&
     /^\d{4}-\d{2}-\d{2}$/.test(candidate.moment_date) &&
+    (hasNormalImportMetadata || hasLegacyImportMetadata) &&
     (candidate.image_path === null ||
       isNonEmptyString(candidate.image_path)) &&
     isNonEmptyString(candidate.created_at) &&
@@ -93,6 +127,7 @@ function mapMomentRow(value: unknown): Moment {
 
   const createdAt = new Date(value.created_at);
   const createdTime = createdAt.toISOString().slice(11, 19);
+  const displayTime = value.moment_time ?? createdTime;
 
   return {
     id: value.id,
@@ -102,12 +137,12 @@ function mapMomentRow(value: unknown): Moment {
       timeZone: "UTC",
       year: "numeric",
     }).format(new Date(`${value.moment_date}T00:00:00Z`)),
-    dateTime: `${value.moment_date}T${createdTime}Z`,
+    dateTime: `${value.moment_date}T${displayTime}${value.moment_time ? "" : "Z"}`,
     time: new Intl.DateTimeFormat("en-US", {
       hour: "numeric",
       minute: "2-digit",
       timeZone: "UTC",
-    }).format(createdAt),
+    }).format(new Date(`1970-01-01T${displayTime}Z`)),
     mood: value.mood,
     title: value.title,
     excerpt: value.description,
@@ -130,6 +165,25 @@ function mapStoredMomentRow(value: unknown): StoredMomentRecord {
   }
 
   return { moment: mapMomentRow(value), imagePath: value.image_path };
+}
+
+function mapImportedMomentRow(value: unknown): StoredImportedMomentRecord {
+  if (
+    !isMomentRow(value) ||
+    value.import_source !== "legacy-localstorage-v1" ||
+    value.import_source_id === null ||
+    value.import_source_hash === null
+  ) {
+    throw new MomentPersistenceError(
+      "Supabase returned an invalid imported Moment record.",
+    );
+  }
+
+  return {
+    ...mapStoredMomentRow(value),
+    sourceId: value.import_source_id,
+    sourceHash: value.import_source_hash,
+  };
 }
 
 function throwPersistenceError(operation: string, cause: unknown): never {
@@ -182,6 +236,23 @@ export class SupabaseMomentRepository implements MomentRepository {
     return data === null ? null : mapStoredMomentRow(data);
   }
 
+  async findImportRecord(
+    sourceId: string,
+  ): Promise<StoredImportedMomentRecord | null> {
+    const { data, error } = await this.client
+      .from("moments")
+      .select(momentColumns)
+      .eq("import_source", "legacy-localstorage-v1")
+      .eq("import_source_id", sourceId)
+      .maybeSingle();
+
+    if (error) {
+      throwPersistenceError("load imported", error);
+    }
+
+    return data === null ? null : mapImportedMomentRow(data);
+  }
+
   async create(moment: Moment): Promise<Moment> {
     const { data, error } = await this.client
       .from("moments")
@@ -199,6 +270,35 @@ export class SupabaseMomentRepository implements MomentRepository {
     }
 
     return mapMomentRow(data);
+  }
+
+  async createImported(
+    moment: Moment,
+    source: { sourceId: string; sourceHash: string; time: string },
+  ): Promise<StoredImportedMomentRecord> {
+    const { data, error } = await this.client
+      .from("moments")
+      .insert({
+        title: moment.title,
+        description: moment.excerpt,
+        mood: moment.mood,
+        moment_date: moment.dateTime.slice(0, 10),
+        moment_time: source.time,
+        import_source: "legacy-localstorage-v1",
+        import_source_id: source.sourceId,
+        import_source_hash: source.sourceHash,
+      })
+      .select(momentColumns)
+      .single();
+
+    if (error?.code === "23505") {
+      throw new MomentImportConflictError({ cause: error });
+    }
+    if (error) {
+      throwPersistenceError("import", error);
+    }
+
+    return mapImportedMomentRow(data);
   }
 
   async update(moment: Moment): Promise<Moment> {
@@ -255,5 +355,22 @@ export class SupabaseMomentRepository implements MomentRepository {
     if (data === null) {
       throw new MomentNotFoundError();
     }
+  }
+
+  async deleteIncompleteImport(id: string): Promise<boolean> {
+    const { data, error } = await this.client
+      .from("moments")
+      .delete()
+      .eq("id", id)
+      .eq("import_source", "legacy-localstorage-v1")
+      .is("image_path", null)
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      throwPersistenceError("roll back imported", error);
+    }
+
+    return data !== null;
   }
 }
