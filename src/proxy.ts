@@ -62,6 +62,17 @@ export default clerkMiddleware({
   authorizedParties: resolveAuthorizedParties(
     process.env.CLERK_AUTHORIZED_PARTIES,
   ),
+  contentSecurityPolicy: {
+    strict: true,
+    directives: {
+      "base-uri": ["none"],
+      "font-src": ["self"],
+      "frame-ancestors": ["none"],
+      "img-src": ["data:", "blob:"],
+      "manifest-src": ["self"],
+      "object-src": ["none"],
+    },
+  },
 });
 
 export const config = {

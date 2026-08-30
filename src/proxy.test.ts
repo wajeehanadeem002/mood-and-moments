@@ -42,6 +42,17 @@ describe("Clerk proxy security", () => {
         "http://localhost:3000",
         "http://127.0.0.1:3000",
       ],
+      contentSecurityPolicy: {
+        strict: true,
+        directives: {
+          "base-uri": ["none"],
+          "font-src": ["self"],
+          "frame-ancestors": ["none"],
+          "img-src": ["data:", "blob:"],
+          "manifest-src": ["self"],
+          "object-src": ["none"],
+        },
+      },
     });
     expect(proxyModule.default).toBe(proxyHandler);
   });
@@ -58,6 +69,17 @@ describe("Clerk proxy security", () => {
         "https://app.example.com",
         "https://www.example.com",
       ],
+      contentSecurityPolicy: {
+        strict: true,
+        directives: {
+          "base-uri": ["none"],
+          "font-src": ["self"],
+          "frame-ancestors": ["none"],
+          "img-src": ["data:", "blob:"],
+          "manifest-src": ["self"],
+          "object-src": ["none"],
+        },
+      },
     });
   });
 

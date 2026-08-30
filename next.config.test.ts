@@ -1,8 +1,12 @@
-import type { NextConfig } from "next";
+import { describe, expect, it } from "vitest";
 
-const nextConfig: NextConfig = {
-  async headers() {
-    return [
+import nextConfig from "./next.config";
+
+describe("Next.js response security headers", () => {
+  it("applies the hardened browser policy to every application response", async () => {
+    const definitions = await nextConfig.headers?.();
+
+    expect(definitions).toEqual([
       {
         source: "/:path*",
         headers: [
@@ -37,8 +41,6 @@ const nextConfig: NextConfig = {
           },
         ],
       },
-    ];
-  },
-};
-
-export default nextConfig;
+    ]);
+  });
+});
