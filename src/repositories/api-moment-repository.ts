@@ -163,7 +163,8 @@ export class ApiMomentRepository implements MomentRepository {
     let response: Response;
 
     try {
-      response = await this.fetcher(input, init);
+      const fetcher = this.fetcher;
+      response = await fetcher(input, init);
     } catch (cause) {
       throw new ApiMomentRepositoryError(
         "The Moment service is temporarily unavailable.",

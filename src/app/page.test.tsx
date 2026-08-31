@@ -306,6 +306,60 @@ describe("Mood & Moments homepage", () => {
     ).toBeNull();
   });
 
+  it("recovers from a transient 401 with Chrome's receiver-sensitive fetch and can create afterward", async () => {
+    apiMoments = [
+      {
+        id: "c6e3bc70-967c-4be4-ae8d-bf2de4b01d3a",
+        date: "Aug 30, 2026",
+        dateTime: "2026-08-30T19:00:00Z",
+        time: "7:00 PM",
+        mood: "calm",
+        title: "Recovered in the browser",
+        excerpt: "The native fetch receiver stayed valid through the retry.",
+      },
+    ];
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: {
+            code: "UNAUTHENTICATED",
+            message: "Authentication is required.",
+          },
+        },
+        401,
+      ),
+    );
+    const receiverSensitiveFetch: typeof fetch = function (
+      this: unknown,
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) {
+      if (this !== undefined && this !== globalThis) {
+        return Promise.reject(
+          new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation"),
+        );
+      }
+
+      return fetchMock(input, init);
+    };
+    vi.stubGlobal("fetch", receiverSensitiveFetch);
+
+    render(<Home />);
+
+    await waitForCloudReady();
+    expect(screen.getAllByText("Recovered in the browser")).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const form = fillMomentForm();
+    fireEvent.click(
+      within(form).getByRole("button", { name: "Create a Moment" }),
+    );
+
+    expect(await screen.findByText("Your moment has been saved.")).not.toBeNull();
+    expect(screen.getAllByText("First rain of the season")).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("creates a Moment in both views and reloads it from the API after remounting", async () => {
     const existingLocalValue = JSON.stringify([{ legacy: "untouched" }]);
     window.localStorage.setItem(MOMENTS_STORAGE_KEY, existingLocalValue);
@@ -656,6 +710,7 @@ describe("Mood & Moments homepage", () => {
       await screen.findByText("Your saved moments couldn’t be loaded right now."),
     ).not.toBeNull();
     expect(screen.getAllByRole("article")).toHaveLength(3);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps every static example Moment read-only", async () => {
