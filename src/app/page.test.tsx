@@ -269,6 +269,43 @@ describe("Mood & Moments homepage", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("recovers when the first authenticated Moment request arrives before the server session is ready", async () => {
+    apiMoments = [
+      {
+        id: "8e4f4e48-5d8a-42ba-8f8b-5ae3ada4f440",
+        date: "Aug 30, 2026",
+        dateTime: "2026-08-30T18:30:00Z",
+        time: "6:30 PM",
+        mood: "calm",
+        title: "Ready after the session settled",
+        excerpt: "The first request was early, but the Moment still loaded.",
+      },
+    ];
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: {
+            code: "UNAUTHENTICATED",
+            message: "Authentication is required.",
+          },
+        },
+        401,
+      ),
+    );
+
+    render(<Home />);
+
+    expect(screen.getByText("Loading your saved moments…")).not.toBeNull();
+    await waitForCloudReady();
+    expect(
+      screen.getAllByText("Ready after the session settled"),
+    ).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      screen.queryByText("Your saved moments couldn’t be loaded right now."),
+    ).toBeNull();
+  });
+
   it("creates a Moment in both views and reloads it from the API after remounting", async () => {
     const existingLocalValue = JSON.stringify([{ legacy: "untouched" }]);
     window.localStorage.setItem(MOMENTS_STORAGE_KEY, existingLocalValue);
@@ -604,9 +641,12 @@ describe("Mood & Moments homepage", () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(
         {
-          error: { code: "UNAUTHORIZED", message: "Authentication is required." },
+          error: {
+            code: "INTERNAL_ERROR",
+            message: "The Moment service is temporarily unavailable.",
+          },
         },
-        401,
+        500,
       ),
     );
 

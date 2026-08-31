@@ -19,7 +19,10 @@ import {
   type MomentDraft,
   type UpdateMomentOptions,
 } from "@/lib/moment-creation";
-import { ApiMomentRepository } from "@/repositories/api-moment-repository";
+import {
+  ApiMomentRepository,
+  ApiMomentRepositoryError,
+} from "@/repositories/api-moment-repository";
 import type { MomentRepository } from "@/repositories/moment-repository";
 
 type HydrationState = "loading" | "ready" | "error";
@@ -33,6 +36,54 @@ function sortMomentsNewestFirst(moments: readonly Moment[]): Moment[] {
 const staticMomentIds = new Set(
   [...recentMoments, ...timelineMoments].map((moment) => moment.id),
 );
+
+const sessionReadinessRetryDelaysMs = [250, 500, 1_000, 2_000, 4_000];
+
+function waitForSessionRetry(delayMs: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      signal.removeEventListener("abort", cancelRetry);
+      resolve();
+    }, delayMs);
+
+    function cancelRetry() {
+      window.clearTimeout(timeoutId);
+      reject(signal.reason);
+    }
+
+    signal.addEventListener("abort", cancelRetry, { once: true });
+  });
+}
+
+async function listMomentsWhenSessionIsReady(
+  repository: MomentRepository,
+  signal: AbortSignal,
+) {
+  for (let failedAttempts = 0; ; failedAttempts += 1) {
+    try {
+      return await repository.list();
+    } catch (error) {
+      const retryDelay = sessionReadinessRetryDelaysMs[failedAttempts];
+      const isSessionReadinessFailure =
+        error instanceof ApiMomentRepositoryError && error.status === 401;
+
+      if (
+        signal.aborted ||
+        !isSessionReadinessFailure ||
+        retryDelay === undefined
+      ) {
+        throw error;
+      }
+
+      await waitForSessionRetry(retryDelay, signal);
+    }
+  }
+}
 
 export function MomentsExperience() {
   const { isLoaded, isSignedIn, userId } = useAuth();
@@ -79,6 +130,7 @@ function MomentsExperienceSession({
 
   useEffect(() => {
     let isCurrent = true;
+    const abortController = new AbortController();
 
     if (!isAuthenticated) {
       return;
@@ -87,7 +139,10 @@ function MomentsExperienceSession({
     async function loadSavedMoments() {
       const repository = new ApiMomentRepository();
       repositoryRef.current = repository;
-      const moments = await repository.list();
+      const moments = await listMomentsWhenSessionIsReady(
+        repository,
+        abortController.signal,
+      );
 
       if (isCurrent) {
         setSavedMoments(
@@ -105,6 +160,7 @@ function MomentsExperienceSession({
 
     return () => {
       isCurrent = false;
+      abortController.abort();
       repositoryRef.current = null;
     };
   }, [isAuthenticated]);
