@@ -78,6 +78,67 @@ describe("SupabaseMomentImageRepository", () => {
     });
   });
 
+  it("retrieves the replacement bytes instead of a cached previous image", async () => {
+    const imageABytes = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x41,
+    ]);
+    const imageBBytes = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x42,
+    ]);
+    let origin = new Blob([imageABytes], { type: "image/png" });
+    const cachedResponses = new Map<string, Blob>();
+    const download = vi.fn(
+      async (
+        _path: string,
+        options?: { cacheNonce?: string },
+      ) => {
+        const cacheKey = options?.cacheNonce ?? "stable-path";
+        const cached = cachedResponses.get(cacheKey);
+
+        if (cached) {
+          return { data: cached, error: null };
+        }
+
+        cachedResponses.set(cacheKey, origin);
+        return { data: origin, error: null };
+      },
+    );
+    const update = vi.fn(async (_path: string, body: Blob) => {
+      origin = body;
+      return { data: { path }, error: null };
+    });
+    const client = {
+      storage: { from: vi.fn(() => ({ download, update })) },
+    } as unknown as SupabaseClient;
+    const repository = new SupabaseMomentImageRepository(client);
+
+    const first = await repository.download(path);
+    expect(new Uint8Array(await first.body.arrayBuffer())).toEqual(imageABytes);
+
+    const replacement = new File([imageBBytes], "replacement.png", {
+      type: "image/png",
+    });
+    await repository.replace(path, replacement);
+
+    const second = await repository.download(path);
+    expect(new Uint8Array(await second.body.arrayBuffer())).toEqual(imageBBytes);
+    expect(download).toHaveBeenNthCalledWith(
+      1,
+      path,
+      { cacheNonce: expect.any(String) },
+      { cache: "no-store" },
+    );
+    expect(download).toHaveBeenNthCalledWith(
+      2,
+      path,
+      { cacheNonce: expect.any(String) },
+      { cache: "no-store" },
+    );
+    expect(download.mock.calls[0]?.[1]?.cacheNonce).not.toBe(
+      download.mock.calls[1]?.[1]?.cacheNonce,
+    );
+  });
+
   it("restores a backup with upsert for failure compensation", async () => {
     const { bucket, client } = createStorageDouble();
     const repository = new SupabaseMomentImageRepository(client);

@@ -70,7 +70,10 @@ describe("GET /api/moments/[id]/image", () => {
   });
 
   it("streams an owned image privately with nosniff protection", async () => {
-    const { client } = createSupabaseClientDouble({ data: row, error: null });
+    const { client, rpc } = createSupabaseClientDouble({
+      data: row,
+      error: null,
+    });
     const { blob, download } = addStorage(client);
     authenticateWith(client);
 
@@ -84,7 +87,14 @@ describe("GET /api/moments/[id]/image", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     expect(await response.blob()).toEqual(blob);
-    expect(download).toHaveBeenCalledWith(imagePath);
+    expect(download).toHaveBeenCalledWith(
+      imagePath,
+      { cacheNonce: expect.any(String) },
+      { cache: "no-store" },
+    );
+    expect(rpc).toHaveBeenCalledWith("consume_moment_api_rate_limit", {
+      requested_bucket: "read",
+    });
   });
 
   it("returns the same 404 when RLS hides another user's Moment", async () => {

@@ -119,6 +119,9 @@ describe("POST /api/moments/import", () => {
       },
     });
     expect(response.status).toBe(201);
+    expect(createAuthenticatedMomentImportService).toHaveBeenCalledWith(
+      "import",
+    );
     expect(importMoment).toHaveBeenCalledWith(
       expect.objectContaining({
         id: expect.any(String),

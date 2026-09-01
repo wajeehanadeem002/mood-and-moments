@@ -84,6 +84,7 @@ describe("/api/moments", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("returns 401 when Clerk has no authenticated session", async () => {
+    const { rpc } = createSupabaseClientDouble();
     createAuthenticatedClientMock.mockRejectedValue(
       new SupabaseAuthenticationError(
         "Authentication is required to access Supabase.",
@@ -99,10 +100,14 @@ describe("/api/moments", () => {
         message: "Authentication is required.",
       },
     });
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it("lists only the Moments visible through the authenticated client", async () => {
-    const { client } = createSupabaseClientDouble({ data: [row], error: null });
+    const { client, rpc } = createSupabaseClientDouble({
+      data: [row],
+      error: null,
+    });
     authenticateWith(client);
 
     const response = await GET();
@@ -110,10 +115,13 @@ describe("/api/moments", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     await expect(response.json()).resolves.toEqual({ moments: [moment] });
+    expect(rpc).toHaveBeenCalledWith("consume_moment_api_rate_limit", {
+      requested_bucket: "read",
+    });
   });
 
   it("creates a validated Moment and returns the database-owned record", async () => {
-    const { client, queries } = createSupabaseClientDouble({
+    const { client, queries, rpc } = createSupabaseClientDouble({
       data: row,
       error: null,
     });
@@ -139,6 +147,55 @@ describe("/api/moments", () => {
       mood: "calm",
       moment_date: "2026-08-29",
     });
+    expect(rpc).toHaveBeenCalledWith("consume_moment_api_rate_limit", {
+      requested_bucket: "mutation",
+    });
+  });
+
+  it("returns 429 without listing Moments after the read limit is exceeded", async () => {
+    const { client, from, rpc } = createSupabaseClientDouble();
+    rpc.mockResolvedValueOnce({
+      data: [
+        {
+          allowed: false,
+          limit_value: 120,
+          remaining: 0,
+          retry_after_seconds: 8,
+        },
+      ],
+      error: null,
+    });
+    authenticateWith(client);
+
+    const response = await GET();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("8");
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("returns 503 without persistence when the mutation limiter is unavailable", async () => {
+    const { client, from, rpc } = createSupabaseClientDouble();
+    rpc.mockResolvedValueOnce({
+      data: null,
+      error: { message: "private limiter failure" },
+    });
+    authenticateWith(client);
+    const request = new Request("http://localhost/api/moments", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "A quiet morning",
+        description: "Sunlight crossed the room.",
+        mood: "calm",
+        date: "2026-08-29",
+      }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(503);
+    expect(from).not.toHaveBeenCalled();
   });
 
   it("uploads a validated image to the server-constructed private path", async () => {

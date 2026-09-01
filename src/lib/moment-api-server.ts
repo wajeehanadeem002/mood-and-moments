@@ -7,6 +7,12 @@ import {
   LegacyImportSourceConflictError,
   MomentImportLifecycleError,
 } from "@/lib/authenticated-moment-import-service";
+import {
+  enforceMomentApiRateLimit,
+  type MomentApiRateLimitBucket,
+  MomentApiRateLimitExceededError,
+  MomentApiRateLimitUnavailableError,
+} from "@/lib/moment-api-rate-limit";
 import { createAuthenticatedSupabaseClient, SupabaseAuthenticationError } from "@/lib/supabase/server";
 import { SupabaseMomentImageRepository } from "@/repositories/supabase-moment-image-repository";
 import {
@@ -21,6 +27,8 @@ type ApiErrorCode =
   | "INVALID_JSON"
   | "IMPORT_SOURCE_CONFLICT"
   | "NOT_FOUND"
+  | "RATE_LIMITED"
+  | "SERVICE_UNAVAILABLE"
   | "UNAUTHORIZED"
   | "VALIDATION_ERROR";
 
@@ -30,8 +38,11 @@ export async function createAuthenticatedMomentRepository() {
   return new SupabaseMomentRepository(client);
 }
 
-export async function createAuthenticatedMomentService() {
+export async function createAuthenticatedMomentService(
+  bucket: MomentApiRateLimitBucket,
+) {
   const { client, userId } = await createAuthenticatedSupabaseClient();
+  await enforceMomentApiRateLimit(client, bucket);
 
   return new AuthenticatedMomentService(
     new SupabaseMomentRepository(client),
@@ -40,8 +51,11 @@ export async function createAuthenticatedMomentService() {
   );
 }
 
-export async function createAuthenticatedMomentImportService() {
+export async function createAuthenticatedMomentImportService(
+  bucket: MomentApiRateLimitBucket,
+) {
   const { client, userId } = await createAuthenticatedSupabaseClient();
+  await enforceMomentApiRateLimit(client, bucket);
 
   return new AuthenticatedMomentImportService(
     new SupabaseMomentRepository(client),
@@ -50,10 +64,17 @@ export async function createAuthenticatedMomentImportService() {
   );
 }
 
-export function jsonResponse(body: unknown, status = 200): Response {
+export function jsonResponse(
+  body: unknown,
+  status = 200,
+  headers?: HeadersInit,
+): Response {
   return Response.json(body, {
     status,
-    headers: { "Cache-Control": "private, no-store" },
+    headers: {
+      "Cache-Control": "private, no-store",
+      ...Object.fromEntries(new Headers(headers)),
+    },
   });
 }
 
@@ -62,6 +83,7 @@ export function errorResponse(
   code: ApiErrorCode,
   message: string,
   fields?: Record<string, string>,
+  headers?: HeadersInit,
 ): Response {
   return jsonResponse(
     {
@@ -72,12 +94,38 @@ export function errorResponse(
       },
     },
     status,
+    headers,
   );
 }
 
 export function handleMomentApiError(error: unknown): Response {
   if (error instanceof SupabaseAuthenticationError) {
     return errorResponse(401, "UNAUTHORIZED", "Authentication is required.");
+  }
+
+  if (error instanceof MomentApiRateLimitExceededError) {
+    const retryAfter = error.retryAfterSeconds.toString();
+
+    return errorResponse(
+      429,
+      "RATE_LIMITED",
+      "Too many requests. Please try again shortly.",
+      undefined,
+      {
+        "RateLimit-Limit": error.limit.toString(),
+        "RateLimit-Remaining": error.remaining.toString(),
+        "RateLimit-Reset": retryAfter,
+        "Retry-After": retryAfter,
+      },
+    );
+  }
+
+  if (error instanceof MomentApiRateLimitUnavailableError) {
+    return errorResponse(
+      503,
+      "SERVICE_UNAVAILABLE",
+      "The Moment service is temporarily unavailable.",
+    );
   }
 
   if (error instanceof MomentNotFoundError) {

@@ -91,7 +91,7 @@ describe("/api/moments/[id]", () => {
       title: "A softer morning",
       mood: "loved",
     };
-    const { client, queries } = createSupabaseClientDouble(
+    const { client, queries, rpc } = createSupabaseClientDouble(
       { data: row, error: null },
       { data: updatedRow, error: null },
     );
@@ -121,6 +121,9 @@ describe("/api/moments/[id]", () => {
       description: "Sunlight crossed the room.",
       mood: "loved",
       moment_date: "2026-08-29",
+    });
+    expect(rpc).toHaveBeenCalledWith("consume_moment_api_rate_limit", {
+      requested_bucket: "mutation",
     });
   });
 
@@ -230,7 +233,7 @@ describe("/api/moments/[id]", () => {
   });
 
   it("deletes an owned Moment without returning a body", async () => {
-    const { client, queries } = createSupabaseClientDouble(
+    const { client, queries, rpc } = createSupabaseClientDouble(
       { data: row, error: null },
       { data: { id }, error: null },
     );
@@ -245,6 +248,9 @@ describe("/api/moments/[id]", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(await response.text()).toBe("");
     expect(queries[1]?.eq).toHaveBeenCalledWith("id", id);
+    expect(rpc).toHaveBeenCalledWith("consume_moment_api_rate_limit", {
+      requested_bucket: "mutation",
+    });
   });
 
   it("returns 404 when RLS prevents deleting the requested Moment", async () => {

@@ -14,7 +14,7 @@ export async function GET(
   context: MomentImageRouteContext,
 ) {
   try {
-    const service = await createAuthenticatedMomentService();
+    const service = await createAuthenticatedMomentService("read");
     const { id } = await context.params;
 
     if (!isValidMomentId(id)) {

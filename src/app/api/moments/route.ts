@@ -15,7 +15,7 @@ import {
 
 export async function GET() {
   try {
-    const service = await createAuthenticatedMomentService();
+    const service = await createAuthenticatedMomentService("read");
     const moments = await service.list();
 
     return jsonResponse({ moments });
@@ -26,7 +26,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const service = await createAuthenticatedMomentService();
+    const service = await createAuthenticatedMomentService("mutation");
     let input;
     let image: File | null = null;
 

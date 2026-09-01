@@ -15,7 +15,7 @@ import {
 
 export async function POST(request: Request) {
   try {
-    const service = await createAuthenticatedMomentImportService();
+    const service = await createAuthenticatedMomentImportService("import");
 
     if (!isMultipartRequest(request)) {
       return errorResponse(

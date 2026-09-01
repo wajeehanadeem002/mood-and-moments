@@ -21,7 +21,7 @@ type MomentRouteContext = {
 
 export async function PATCH(request: Request, context: MomentRouteContext) {
   try {
-    const service = await createAuthenticatedMomentService();
+    const service = await createAuthenticatedMomentService("mutation");
     const { id } = await context.params;
 
     if (!isValidMomentId(id)) {
@@ -105,7 +105,7 @@ export async function PATCH(request: Request, context: MomentRouteContext) {
 
 export async function DELETE(_request: Request, context: MomentRouteContext) {
   try {
-    const service = await createAuthenticatedMomentService();
+    const service = await createAuthenticatedMomentService("mutation");
     const { id } = await context.params;
 
     if (!isValidMomentId(id)) {

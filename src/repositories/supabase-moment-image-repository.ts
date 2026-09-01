@@ -98,7 +98,11 @@ export class SupabaseMomentImageRepository {
   async download(path: string): Promise<StoredMomentImage> {
     const { data, error } = await this.client.storage
       .from(MOMENT_IMAGES_BUCKET)
-      .download(path);
+      .download(
+        path,
+        { cacheNonce: crypto.randomUUID() },
+        { cache: "no-store" },
+      );
 
     if (error || !data) {
       persistenceError("download", error);
