@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { Moment } from "@/data/moments";
-import { createSupabaseClientDouble } from "@/test/supabase-query-double";
+import {
+  createConfiguredSupabaseClientDouble,
+  createSupabaseClientDouble,
+} from "@/test/supabase-query-double";
 
 import {
   MomentImportConflictError,
@@ -25,10 +28,12 @@ const row = {
   import_image_hash: null,
   created_at: "2026-08-29T04:15:30.000Z",
   updated_at: "2026-08-29T04:15:30.000Z",
+  revision: 1,
 };
 
 const moment: Moment = {
   id: row.id,
+  revision: 1,
   date: "Aug 29, 2026",
   dateTime: "2026-08-29T04:15:30Z",
   time: "4:15 AM",
@@ -38,6 +43,18 @@ const moment: Moment = {
 };
 
 describe("SupabaseMomentRepository", () => {
+  it("maps the database-controlled revision into a cloud Moment", async () => {
+    const { client } = createSupabaseClientDouble({
+      data: [{ ...row, revision: 7 }],
+      error: null,
+    });
+    const repository = new SupabaseMomentRepository(client);
+
+    await expect(repository.list()).resolves.toEqual([
+      { ...moment, revision: 7 },
+    ]);
+  });
+
   it("lists database rows as display-ready Moments in timeline order", async () => {
     const { client, from, queries } = createSupabaseClientDouble({
       data: [row],
@@ -124,6 +141,7 @@ describe("SupabaseMomentRepository", () => {
       imagePath: null,
       importImageHash: null,
       importSource: "legacy-localstorage-v1",
+      revision: 1,
       sourceHash: "b".repeat(64),
       sourceId: "legacy-1",
     });
@@ -209,7 +227,7 @@ describe("SupabaseMomentRepository", () => {
     });
   });
 
-  it("updates only editable Moment fields and scopes the mutation by id", async () => {
+  it("updates through the atomic revision RPC and returns its next revision", async () => {
     const updatedRow = {
       ...row,
       title: "A softer morning",
@@ -217,28 +235,108 @@ describe("SupabaseMomentRepository", () => {
       moment_date: "2026-08-28",
       updated_at: "2026-08-29T05:00:00.000Z",
     };
-    const { client, queries } = createSupabaseClientDouble({
-      data: updatedRow,
-      error: null,
+    const { client, rpc } = createConfiguredSupabaseClientDouble({
+      rpcResults: [
+        {
+          data: [
+            { outcome: "updated", moment: { ...updatedRow, revision: 2 }, cleanup_path: null },
+          ],
+          error: null,
+        },
+      ],
     });
     const repository = new SupabaseMomentRepository(client);
 
-    await repository.update({
+    await expect(repository.update({
       ...moment,
       date: "Aug 28, 2026",
       dateTime: "2026-08-28T04:15:30Z",
       mood: "loved",
       title: "A softer morning",
-    });
-    const query = queries[0]!;
+    })).resolves.toEqual(expect.objectContaining({ revision: 2 }));
 
-    expect(query.update).toHaveBeenCalledWith({
-      title: "A softer morning",
-      description: "Sunlight crossed the room.",
-      mood: "loved",
-      moment_date: "2026-08-28",
+    expect(rpc).toHaveBeenCalledWith("update_moment_if_revision", {
+      requested_description: "Sunlight crossed the room.",
+      requested_image_path: null,
+      requested_import_image_hash: null,
+      requested_moment_date: "2026-08-28",
+      requested_moment_id: row.id,
+      requested_mood: "loved",
+      requested_revision: 1,
+      requested_title: "A softer morning",
     });
-    expect(query.eq).toHaveBeenCalledWith("id", row.id);
+  });
+
+  it("preserves an image-bearing Moment's current private path through CAS", async () => {
+    const imagePath = `${row.owner_id}/${row.id}/70000000-0000-4000-8000-000000000001`;
+    const imageRow = { ...row, image_path: imagePath };
+    const updatedRow = {
+      ...imageRow,
+      revision: 2,
+      title: "A softer morning",
+    };
+    const { client, rpc } = createConfiguredSupabaseClientDouble(
+      {
+        rpcResults: [
+          {
+            data: [
+              {
+                outcome: "updated",
+                moment: updatedRow,
+                cleanup_path: null,
+              },
+            ],
+            error: null,
+          },
+        ],
+      },
+      { data: imageRow, error: null },
+    );
+    const repository = new SupabaseMomentRepository(client);
+    const imageMoment: Moment = {
+      ...moment,
+      title: "A softer morning",
+      image: {
+        src: `/api/moments/${moment.id}/image`,
+        alt: "A quiet morning moment image.",
+      },
+    };
+
+    await expect(repository.update(imageMoment)).resolves.toEqual(
+      expect.objectContaining({ revision: 2, title: "A softer morning" }),
+    );
+
+    expect(rpc).toHaveBeenCalledWith("update_moment_if_revision", {
+      requested_description: moment.excerpt,
+      requested_image_path: imagePath,
+      requested_import_image_hash: null,
+      requested_moment_date: "2026-08-29",
+      requested_moment_id: moment.id,
+      requested_mood: moment.mood,
+      requested_revision: 1,
+      requested_title: "A softer morning",
+    });
+  });
+
+  it("surfaces the latest owner-scoped Moment when a revision is stale", async () => {
+    const latestRow = { ...row, revision: 2, title: "A newer title" };
+    const { client } = createConfiguredSupabaseClientDouble({
+      rpcResults: [
+        {
+          data: [{ outcome: "conflict", moment: latestRow, cleanup_path: null }],
+          error: null,
+        },
+      ],
+    });
+    const repository = new SupabaseMomentRepository(client);
+
+    await expect(repository.update(moment)).rejects.toMatchObject({
+      name: "MomentVersionConflictError",
+      currentMoment: expect.objectContaining({
+        revision: 2,
+        title: "A newer title",
+      }),
+    });
   });
 
   it("returns null when RLS hides a requested Moment", async () => {
@@ -272,37 +370,43 @@ describe("SupabaseMomentRepository", () => {
       imagePath,
       importImageHash: null,
       importSource: null,
+      revision: 1,
     });
   });
 
   it("updates the image reference and server-computed import digest atomically", async () => {
     const imagePath = `${row.owner_id}/${row.id}/image`;
     const importImageHash = "d".repeat(64);
-    const { client, queries } = createSupabaseClientDouble({
-      data: {
-        ...row,
-        image_path: imagePath,
-        import_image_hash: importImageHash,
-        import_source: "legacy-localstorage-v1",
-        import_source_id: "legacy-1",
-        import_source_hash: "c".repeat(64),
-        moment_time: "09:15:30",
-      },
-      error: null,
+    const savedRow = {
+      ...row,
+      revision: 2,
+      image_path: imagePath,
+      import_image_hash: importImageHash,
+      import_source: "legacy-localstorage-v1",
+      import_source_id: "legacy-1",
+      import_source_hash: "c".repeat(64),
+      moment_time: "09:15:30",
+    };
+    const { client, rpc } = createConfiguredSupabaseClientDouble({
+      rpcResults: [{
+        data: [{ outcome: "updated", moment: savedRow, cleanup_path: null }],
+        error: null,
+      }],
     });
     const repository = new SupabaseMomentRepository(client);
 
     await repository.updateWithImagePath(moment, imagePath, importImageHash);
 
-    expect(queries[0]!.update).toHaveBeenCalledWith({
-      title: moment.title,
-      description: moment.excerpt,
-      mood: moment.mood,
-      moment_date: "2026-08-29",
-      image_path: imagePath,
-      import_image_hash: importImageHash,
+    expect(rpc).toHaveBeenCalledWith("update_moment_if_revision", {
+      requested_title: moment.title,
+      requested_description: moment.excerpt,
+      requested_mood: moment.mood,
+      requested_moment_date: "2026-08-29",
+      requested_moment_id: moment.id,
+      requested_revision: 1,
+      requested_image_path: imagePath,
+      requested_import_image_hash: importImageHash,
     });
-    expect(queries[0]!.eq).toHaveBeenCalledWith("id", row.id);
   });
 
   it("fails closed when an imported image digest is malformed", async () => {
@@ -326,9 +430,11 @@ describe("SupabaseMomentRepository", () => {
   });
 
   it("reports a missing or RLS-hidden update as not found", async () => {
-    const { client } = createSupabaseClientDouble({
-      data: null,
-      error: null,
+    const { client } = createConfiguredSupabaseClientDouble({
+      rpcResults: [{
+        data: [{ outcome: "not_found", moment: null, cleanup_path: null }],
+        error: null,
+      }],
     });
     const repository = new SupabaseMomentRepository(client);
 
@@ -337,39 +443,44 @@ describe("SupabaseMomentRepository", () => {
     );
   });
 
-  it("reports a missing or RLS-hidden delete as not found", async () => {
-    const { client, queries } = createSupabaseClientDouble({
-      data: null,
-      error: null,
+  it("reports a missing or RLS-hidden revision delete as not found", async () => {
+    const { client, rpc } = createConfiguredSupabaseClientDouble({
+      rpcResults: [{ data: [{ outcome: "not_found", moment: null, cleanup_path: null }], error: null }],
     });
     const repository = new SupabaseMomentRepository(client);
 
-    await expect(repository.delete(row.id)).rejects.toBeInstanceOf(
+    await expect(repository.delete(row.id, 1)).rejects.toBeInstanceOf(
       MomentNotFoundError,
     );
-    const query = queries[0]!;
-    expect(query.delete).toHaveBeenCalledOnce();
-    expect(query.eq).toHaveBeenCalledWith("id", row.id);
+    expect(rpc).toHaveBeenCalledWith("delete_moment_if_revision", {
+      requested_moment_id: row.id,
+      requested_revision: 1,
+    });
   });
 
-  it("deletes import compensation only while its image is still unlinked", async () => {
-    const { client, queries } = createSupabaseClientDouble({
-      data: { id: row.id },
-      error: null,
+  it("authorizes and completes only the server-generated image candidate", async () => {
+    const path = `${row.owner_id}/${row.id}/70000000-0000-4000-8000-000000000001`;
+    const { client, rpc } = createConfiguredSupabaseClientDouble({
+      rpcResults: [
+        { data: [{ outcome: "authorized", moment: row, cleanup_path: path }], error: null },
+        { data: [{ outcome: "completed" }], error: null },
+      ],
     });
     const repository = new SupabaseMomentRepository(client);
 
     await expect(
-      repository.deleteIncompleteImport(row.id),
-    ).resolves.toBe(true);
-    expect(queries[0]!.delete).toHaveBeenCalledOnce();
-    expect(queries[0]!.eq).toHaveBeenNthCalledWith(1, "id", row.id);
-    expect(queries[0]!.eq).toHaveBeenNthCalledWith(
-      2,
-      "import_source",
-      "legacy-localstorage-v1",
-    );
-    expect(queries[0]!.is).toHaveBeenCalledWith("image_path", null);
+      repository.authorizeImageCandidate(row.id, 1, path),
+    ).resolves.toBeUndefined();
+    await expect(repository.completeImageCleanup(path)).resolves.toBeUndefined();
+
+    expect(rpc).toHaveBeenNthCalledWith(1, "authorize_moment_image_candidate", {
+      requested_image_path: path,
+      requested_moment_id: row.id,
+      requested_revision: 1,
+    });
+    expect(rpc).toHaveBeenNthCalledWith(2, "complete_moment_image_cleanup", {
+      requested_image_path: path,
+    });
   });
 
   it("converts Supabase failures into a typed persistence error", async () => {

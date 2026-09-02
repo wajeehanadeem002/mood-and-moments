@@ -1,20 +1,29 @@
 import type { Moment } from "@/data/moments";
+import {
+  createMomentImagePath,
+  isOwnedMomentImagePath,
+} from "@/lib/moment-image-path";
 import { sha256MomentImage } from "@/lib/moment-image-validation";
 import type { SupabaseMomentImageRepository } from "@/repositories/supabase-moment-image-repository";
 import {
   MomentImportConflictError,
+  MomentVersionConflictError,
   type StoredImportedMomentRecord,
   type SupabaseMomentRepository,
 } from "@/repositories/supabase-moment-repository";
 
 type ImportMomentStore = Pick<
   SupabaseMomentRepository,
-  "createImported" | "findImportRecord" | "updateWithImagePath"
+  | "authorizeImageCandidate"
+  | "completeImageCleanup"
+  | "createImported"
+  | "findImportRecord"
+  | "updateWithImagePath"
 >;
 
 type ImportImageStore = Pick<
   SupabaseMomentImageRepository,
-  "download" | "upload"
+  "download" | "remove" | "upload"
 >;
 
 type Pause = (milliseconds: number) => Promise<void>;
@@ -65,21 +74,14 @@ export class MomentImportLifecycleError extends Error {
   }
 }
 
-function stableImagePath(userId: string, momentId: string) {
-  if (!userId || userId.includes("/")) {
-    throw new MomentImportLifecycleError(
-      "The authenticated user identity cannot be used for image storage.",
-    );
-  }
-  return `${userId}/${momentId}/image`;
-}
-
 export class AuthenticatedMomentImportService {
   constructor(
     private readonly moments: ImportMomentStore,
     private readonly images: ImportImageStore,
     private readonly userId: string,
     private readonly pause: Pause = defaultPause,
+    private readonly createImageGeneration: () => string = () =>
+      crypto.randomUUID(),
   ) {}
 
   async import(
@@ -119,41 +121,17 @@ export class AuthenticatedMomentImportService {
       return await this.confirmExistingImage(record, source, imageHash);
     }
 
-    const path = stableImagePath(this.userId, record.moment.id);
-    let imageOutcome: LegacyMomentImportOutcome["imageOutcome"] = "uploaded";
+    const path = this.createImagePath(record.moment.id);
+    let candidateAuthorized = false;
 
     try {
+      await this.moments.authorizeImageCandidate(
+        record.moment.id,
+        record.revision,
+        path,
+      );
+      candidateAuthorized = true;
       await this.images.upload(path, image);
-    } catch (uploadCause) {
-      try {
-        const storedImage = await this.images.download(path);
-        const storedImageHash = await sha256MomentImage(storedImage.body);
-
-        if (storedImageHash !== imageHash) {
-          return this.outcome(
-            record,
-            source,
-            "image_mismatch",
-            "mismatch",
-          );
-        }
-
-        imageOutcome = "already_present";
-      } catch (downloadCause) {
-        const latest = await this.waitForConcurrentImageCompletion(source);
-        if (latest?.imagePath) {
-          return await this.confirmExistingImage(latest, source, imageHash);
-        }
-
-        throw new MomentImportLifecycleError(
-          "Legacy Moment image persistence could not complete and remains available for retry.",
-          [downloadCause],
-          { cause: uploadCause },
-        );
-      }
-    }
-
-    try {
       const saved = await this.moments.updateWithImagePath(
         record.moment,
         path,
@@ -161,13 +139,15 @@ export class AuthenticatedMomentImportService {
       );
       return {
         outcome: created ? "created" : "completed_existing",
-        imageOutcome,
+        imageOutcome: "uploaded",
         sourceId: source.sourceId,
         sourceHash: source.sourceHash,
-        moment: saved,
+        moment: saved.moment,
       };
     } catch (cause) {
-      const cleanupFailures: unknown[] = [];
+      const cleanupFailures = candidateAuthorized
+        ? await this.cleanupCandidate(path)
+        : [];
       let latest: StoredImportedMomentRecord | null | undefined;
 
       try {
@@ -177,6 +157,15 @@ export class AuthenticatedMomentImportService {
         }
       } catch (error) {
         cleanupFailures.push(error);
+      }
+
+      if (cause instanceof MomentVersionConflictError && latest) {
+        return this.outcome(
+          latest,
+          source,
+          "image_mismatch",
+          "mismatch",
+        );
       }
 
       throw new MomentImportLifecycleError(
@@ -221,14 +210,20 @@ export class AuthenticatedMomentImportService {
     source: LegacyMomentImportSource,
     suppliedImageHash: string,
   ): Promise<LegacyMomentImportOutcome> {
-    const expectedPath = stableImagePath(this.userId, record.moment.id);
-    if (record.imagePath !== expectedPath) {
+    if (
+      !record.imagePath ||
+      !isOwnedMomentImagePath(
+        record.imagePath,
+        this.userId,
+        record.moment.id,
+      )
+    ) {
       throw new MomentImportLifecycleError(
         "The stored imported Moment image reference is invalid.",
       );
     }
 
-    const storedImage = await this.images.download(expectedPath);
+    const storedImage = await this.images.download(record.imagePath);
     const storedImageHash = await sha256MomentImage(storedImage.body);
 
     if (
@@ -259,5 +254,41 @@ export class AuthenticatedMomentImportService {
       sourceHash: source.sourceHash,
       moment: record.moment,
     };
+  }
+
+  private createImagePath(momentId: string): string {
+    try {
+      return createMomentImagePath(
+        this.userId,
+        momentId,
+        this.createImageGeneration(),
+      );
+    } catch (cause) {
+      throw new MomentImportLifecycleError(
+        "The authenticated Moment image path is invalid.",
+        [],
+        { cause },
+      );
+    }
+  }
+
+  private async cleanupCandidate(path: string): Promise<unknown[]> {
+    const failures: unknown[] = [];
+
+    try {
+      await this.images.remove(path);
+    } catch (error) {
+      failures.push(error);
+    }
+
+    if (failures.length === 0) {
+      try {
+        await this.moments.completeImageCleanup(path);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+
+    return failures;
   }
 }

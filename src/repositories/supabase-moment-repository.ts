@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { Moment } from "@/data/moments";
 import type { MomentRepository } from "@/repositories/moment-repository";
+import { MomentConflictError } from "@/repositories/moment-repository";
 
 type MomentRow = {
   id: string;
@@ -18,10 +19,12 @@ type MomentRow = {
   import_image_hash: string | null;
   created_at: string;
   updated_at: string;
+  revision: number;
 };
 
 export type StoredMomentRecord = {
   moment: Moment;
+  revision: number;
   imagePath: string | null;
   importImageHash: string | null;
   importSource: "legacy-localstorage-v1" | null;
@@ -47,6 +50,7 @@ const momentColumns = [
   "import_image_hash",
   "created_at",
   "updated_at",
+  "revision",
 ].join(",");
 
 const allowedMoods = new Set<Moment["mood"]>([
@@ -69,6 +73,16 @@ export class MomentImportConflictError extends Error {
   constructor(options?: ErrorOptions) {
     super("The legacy Moment source already exists.", options);
     this.name = "MomentImportConflictError";
+  }
+}
+
+export class MomentVersionConflictError extends MomentConflictError {
+  constructor(
+    currentMoment: Moment,
+    public readonly cleanupFailures: readonly unknown[] = [],
+  ) {
+    super(currentMoment);
+    this.name = "MomentVersionConflictError";
   }
 }
 
@@ -125,7 +139,9 @@ function isMomentRow(value: unknown): value is MomentRow {
     isNonEmptyString(candidate.created_at) &&
     !Number.isNaN(new Date(candidate.created_at).valueOf()) &&
     isNonEmptyString(candidate.updated_at) &&
-    !Number.isNaN(new Date(candidate.updated_at).valueOf())
+    !Number.isNaN(new Date(candidate.updated_at).valueOf()) &&
+    Number.isSafeInteger(candidate.revision) &&
+    Number(candidate.revision) >= 1
   );
 }
 
@@ -142,6 +158,7 @@ function mapMomentRow(value: unknown): Moment {
 
   return {
     id: value.id,
+    revision: value.revision,
     date: new Intl.DateTimeFormat("en-US", {
       day: "numeric",
       month: "short",
@@ -177,6 +194,7 @@ function mapStoredMomentRow(value: unknown): StoredMomentRecord {
 
   return {
     moment: mapMomentRow(value),
+    revision: value.revision,
     imagePath: value.image_path,
     importImageHash: value.import_image_hash,
     importSource: value.import_source,
@@ -207,6 +225,85 @@ function throwPersistenceError(operation: string, cause: unknown): never {
     `Could not ${operation} Moments in Supabase.`,
     { cause },
   );
+}
+
+type MutationOutcome =
+  | "authorized"
+  | "conflict"
+  | "deleted"
+  | "not_found"
+  | "updated";
+
+type MutationResult = {
+  outcome: MutationOutcome;
+  moment: unknown;
+  cleanupPath: string | null;
+};
+
+function readMutationResult(value: unknown): MutationResult {
+  if (!Array.isArray(value) || value.length !== 1) {
+    throw new MomentPersistenceError(
+      "Supabase returned an invalid Moment mutation result.",
+    );
+  }
+
+  const candidate = value[0];
+  if (!candidate || typeof candidate !== "object") {
+    throw new MomentPersistenceError(
+      "Supabase returned an invalid Moment mutation result.",
+    );
+  }
+
+  const result = candidate as Record<string, unknown>;
+  const outcome = result.outcome;
+  if (
+    outcome !== "authorized" &&
+    outcome !== "conflict" &&
+    outcome !== "deleted" &&
+    outcome !== "not_found" &&
+    outcome !== "updated"
+  ) {
+    throw new MomentPersistenceError(
+      "Supabase returned an invalid Moment mutation outcome.",
+    );
+  }
+
+  const cleanupPath = result.cleanup_path;
+  if (cleanupPath !== null && typeof cleanupPath !== "string") {
+    throw new MomentPersistenceError(
+      "Supabase returned an invalid Moment cleanup reference.",
+    );
+  }
+
+  return {
+    outcome,
+    moment: result.moment,
+    cleanupPath,
+  };
+}
+
+function readCleanupResult(value: unknown): string {
+  if (!Array.isArray(value) || value.length !== 1) {
+    throw new MomentPersistenceError(
+      "Supabase returned an invalid Moment cleanup result.",
+    );
+  }
+
+  const candidate = value[0];
+  if (!candidate || typeof candidate !== "object") {
+    throw new MomentPersistenceError(
+      "Supabase returned an invalid Moment cleanup result.",
+    );
+  }
+
+  const outcome = (candidate as Record<string, unknown>).outcome;
+  if (typeof outcome !== "string") {
+    throw new MomentPersistenceError(
+      "Supabase returned an invalid Moment cleanup outcome.",
+    );
+  }
+
+  return outcome;
 }
 
 export class SupabaseMomentRepository implements MomentRepository {
@@ -318,14 +415,27 @@ export class SupabaseMomentRepository implements MomentRepository {
   }
 
   async update(moment: Moment): Promise<Moment> {
-    return this.updateRow(moment);
+    if (!moment.image) {
+      return (await this.updateRow(moment, null, null)).moment;
+    }
+
+    const record = await this.findRecordById(moment.id);
+    if (!record) throw new MomentNotFoundError();
+
+    return (
+      await this.updateRow(
+        moment,
+        record.imagePath,
+        record.importImageHash,
+      )
+    ).moment;
   }
 
   async updateWithImagePath(
     moment: Moment,
     imagePath: string | null,
     importImageHash: string | null,
-  ): Promise<Moment> {
+  ): Promise<{ moment: Moment; cleanupPath: string | null }> {
     return this.updateRow(moment, imagePath, importImageHash);
   }
 
@@ -333,66 +443,146 @@ export class SupabaseMomentRepository implements MomentRepository {
     moment: Moment,
     imagePath?: string | null,
     importImageHash?: string | null,
-  ): Promise<Moment> {
-    const { data, error } = await this.client
-      .from("moments")
-      .update({
-        title: moment.title,
-        description: moment.excerpt,
-        mood: moment.mood,
-        moment_date: moment.dateTime.slice(0, 10),
-        ...(imagePath !== undefined ? { image_path: imagePath } : {}),
-        ...(importImageHash !== undefined
-          ? { import_image_hash: importImageHash }
-          : {}),
-      })
-      .eq("id", moment.id)
-      .select(momentColumns)
-      .maybeSingle();
+  ): Promise<{ moment: Moment; cleanupPath: string | null }> {
+    const revision = moment.revision;
+
+    if (!Number.isSafeInteger(revision) || Number(revision) < 1) {
+      throw new MomentPersistenceError(
+        "A current Moment revision is required for update.",
+      );
+    }
+
+    if (imagePath === undefined) {
+      throw new MomentPersistenceError(
+        "The current Moment image reference is required for update.",
+      );
+    }
+
+    const { data, error } = await this.client.rpc(
+      "update_moment_if_revision",
+      {
+        requested_moment_id: moment.id,
+        requested_revision: revision,
+        requested_title: moment.title,
+        requested_description: moment.excerpt,
+        requested_mood: moment.mood,
+        requested_moment_date: moment.dateTime.slice(0, 10),
+        requested_image_path: imagePath,
+        requested_import_image_hash: importImageHash ?? null,
+      },
+    );
 
     if (error) {
       throwPersistenceError("update", error);
     }
 
-    if (data === null) {
+    const result = readMutationResult(data);
+
+    if (result.outcome === "not_found") {
       throw new MomentNotFoundError();
     }
 
-    return mapMomentRow(data);
+    if (result.outcome === "conflict") {
+      throw new MomentVersionConflictError(mapMomentRow(result.moment));
+    }
+
+    if (result.outcome !== "updated") {
+      throw new MomentPersistenceError(
+        "Supabase returned an invalid Moment update outcome.",
+      );
+    }
+
+    return {
+      moment: mapMomentRow(result.moment),
+      cleanupPath: result.cleanupPath,
+    };
   }
 
-  async delete(id: string): Promise<void> {
-    const { data, error } = await this.client
-      .from("moments")
-      .delete()
-      .eq("id", id)
-      .select("id")
-      .maybeSingle();
+  async delete(id: string, revision?: number): Promise<void> {
+    await this.deleteRecord(id, revision);
+  }
+
+  async deleteRecord(
+    id: string,
+    revision?: number,
+  ): Promise<{ cleanupPath: string | null }> {
+    if (!Number.isSafeInteger(revision) || Number(revision) < 1) {
+      throw new MomentPersistenceError(
+        "A current Moment revision is required for delete.",
+      );
+    }
+
+    const { data, error } = await this.client.rpc(
+      "delete_moment_if_revision",
+      {
+        requested_moment_id: id,
+        requested_revision: revision,
+      },
+    );
 
     if (error) {
       throwPersistenceError("delete", error);
     }
 
-    if (data === null) {
+    const result = readMutationResult(data);
+
+    if (result.outcome === "not_found") {
       throw new MomentNotFoundError();
     }
-  }
 
-  async deleteIncompleteImport(id: string): Promise<boolean> {
-    const { data, error } = await this.client
-      .from("moments")
-      .delete()
-      .eq("id", id)
-      .eq("import_source", "legacy-localstorage-v1")
-      .is("image_path", null)
-      .is("import_image_hash", null)
-      .select("id")
-      .maybeSingle();
-
-    if (error) {
-      throwPersistenceError("roll back imported", error);
+    if (result.outcome === "conflict") {
+      throw new MomentVersionConflictError(mapMomentRow(result.moment));
     }
 
-    return data !== null;
+    if (result.outcome !== "deleted") {
+      throw new MomentPersistenceError(
+        "Supabase returned an invalid Moment delete outcome.",
+      );
+    }
+
+    return { cleanupPath: result.cleanupPath };
   }
+
+  async authorizeImageCandidate(
+    id: string,
+    revision: number,
+    imagePath: string,
+  ): Promise<void> {
+    const { data, error } = await this.client.rpc(
+      "authorize_moment_image_candidate",
+      {
+        requested_moment_id: id,
+        requested_revision: revision,
+        requested_image_path: imagePath,
+      },
+    );
+
+    if (error) throwPersistenceError("authorize", error);
+    const result = readMutationResult(data);
+    if (result.outcome === "not_found") throw new MomentNotFoundError();
+    if (result.outcome === "conflict") {
+      throw new MomentVersionConflictError(mapMomentRow(result.moment));
+    }
+    if (result.outcome !== "authorized") {
+      throw new MomentPersistenceError(
+        "Supabase returned an invalid Moment image authorization outcome.",
+      );
+    }
+  }
+
+  async completeImageCleanup(imagePath: string): Promise<void> {
+    const { data, error } = await this.client.rpc(
+      "complete_moment_image_cleanup",
+      { requested_image_path: imagePath },
+    );
+
+    if (error) throwPersistenceError("complete image cleanup for", error);
+    const result = readCleanupResult(data);
+    if (result !== "completed" && result !== "not_found") {
+      throw new MomentPersistenceError(
+        "The Moment image cleanup authorization cannot be completed while its object exists.",
+      );
+    }
+  }
+
 }

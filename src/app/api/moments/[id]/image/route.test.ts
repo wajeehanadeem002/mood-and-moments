@@ -31,6 +31,7 @@ const row = {
   image_path: imagePath,
   created_at: "2026-08-29T04:15:30.000Z",
   updated_at: "2026-08-29T04:15:30.000Z",
+  revision: 1,
 };
 
 function context(momentId = id) {

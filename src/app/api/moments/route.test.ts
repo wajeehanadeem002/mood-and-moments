@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Moment } from "@/data/moments";
 import { SupabaseAuthenticationError } from "@/lib/supabase/server";
-import { createSupabaseClientDouble } from "@/test/supabase-query-double";
+import {
+  createConfiguredSupabaseClientDouble,
+  createSupabaseClientDouble,
+} from "@/test/supabase-query-double";
 
 const { createAuthenticatedClientMock } = vi.hoisted(() => ({
   createAuthenticatedClientMock: vi.fn(),
@@ -30,10 +33,12 @@ const row = {
   image_path: null,
   created_at: "2026-08-29T04:15:30.000Z",
   updated_at: "2026-08-29T04:15:30.000Z",
+  revision: 1,
 };
 
 const moment: Moment = {
   id: row.id,
+  revision: 1,
   date: "Aug 29, 2026",
   dateTime: "2026-08-29T04:15:30Z",
   time: "4:15 AM",
@@ -199,11 +204,39 @@ describe("/api/moments", () => {
   });
 
   it("uploads a validated image to the server-constructed private path", async () => {
-    const imagePath = `user_a/${row.id}/image`;
-    const imageRow = { ...row, image_path: imagePath };
-    const { client, queries } = createSupabaseClientDouble(
+    const generation = "70000000-0000-4000-8000-000000000001";
+    const imagePath = `user_a/${row.id}/${generation}`;
+    const imageRow = { ...row, image_path: imagePath, revision: 2 };
+    vi.spyOn(crypto, "randomUUID").mockReturnValue(generation);
+    const { client, rpc } = createConfiguredSupabaseClientDouble(
+      {
+        rpcResults: [
+          {
+            data: [
+              {
+                allowed: true,
+                limit_value: 30,
+                remaining: 29,
+                retry_after_seconds: 60,
+              },
+            ],
+            error: null,
+          },
+          {
+            data: [
+              { outcome: "authorized", moment: row, cleanup_path: imagePath },
+            ],
+            error: null,
+          },
+          {
+            data: [
+              { outcome: "updated", moment: imageRow, cleanup_path: null },
+            ],
+            error: null,
+          },
+        ],
+      },
       { data: row, error: null },
-      { data: imageRow, error: null },
     );
     const { bucket, from } = addStorage(client);
     authenticateWith(client);
@@ -221,6 +254,7 @@ describe("/api/moments", () => {
     await expect(response.json()).resolves.toEqual({
       moment: {
         ...moment,
+        revision: 2,
         image: {
           src: `/api/moments/${row.id}/image`,
           alt: "A quiet morning moment image.",
@@ -233,9 +267,21 @@ describe("/api/moments", () => {
       expect.any(File),
       expect.objectContaining({ contentType: "image/png", upsert: false }),
     );
-    expect(queries[1]!.update).toHaveBeenCalledWith(
-      expect.objectContaining({ image_path: imagePath }),
-    );
+    expect(rpc).toHaveBeenNthCalledWith(2, "authorize_moment_image_candidate", {
+      requested_moment_id: row.id,
+      requested_revision: 1,
+      requested_image_path: imagePath,
+    });
+    expect(rpc).toHaveBeenNthCalledWith(3, "update_moment_if_revision", {
+      requested_moment_id: row.id,
+      requested_revision: 1,
+      requested_title: row.title,
+      requested_description: row.description,
+      requested_mood: row.mood,
+      requested_moment_date: row.moment_date,
+      requested_image_path: imagePath,
+      requested_import_image_hash: null,
+    });
   });
 
   it("rejects a multipart image whose declared type does not match its bytes", async () => {

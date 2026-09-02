@@ -10,6 +10,7 @@ import {
 
 const moment: Moment = {
   id: "00000000-0000-4000-8000-000000000001",
+  revision: 1,
   date: "Aug 28, 2026",
   dateTime: "2026-08-28T09:15:30",
   time: "9:15 AM",
@@ -189,6 +190,23 @@ describe("ApiLegacyMomentImportRepository", () => {
       vi.fn().mockResolvedValue(jsonResponse({ result: {} })) as typeof fetch,
     );
     await expect(malformed.import(candidate)).rejects.toEqual(
+      expect.objectContaining({ code: "INVALID_RESPONSE" }),
+    );
+
+    const unversioned = new ApiLegacyMomentImportRepository(
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          result: {
+            outcome: "created",
+            imageOutcome: "not_provided",
+            sourceId: candidate.sourceId,
+            sourceHash: candidate.sourceHash,
+            moment: { ...moment, revision: undefined },
+          },
+        }),
+      ) as typeof fetch,
+    );
+    await expect(unversioned.import(candidate)).rejects.toEqual(
       expect.objectContaining({ code: "INVALID_RESPONSE" }),
     );
 

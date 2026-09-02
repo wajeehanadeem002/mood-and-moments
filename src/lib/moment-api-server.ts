@@ -17,16 +17,21 @@ import { createAuthenticatedSupabaseClient, SupabaseAuthenticationError } from "
 import { SupabaseMomentImageRepository } from "@/repositories/supabase-moment-image-repository";
 import {
   MomentNotFoundError,
+  MomentVersionConflictError,
   SupabaseMomentRepository,
 } from "@/repositories/supabase-moment-repository";
+import { MomentConflictError } from "@/repositories/moment-repository";
 
 type ApiErrorCode =
   | "INTERNAL_ERROR"
   | "INVALID_ID"
   | "INVALID_FORM_DATA"
   | "INVALID_JSON"
+  | "INVALID_PRECONDITION"
   | "IMPORT_SOURCE_CONFLICT"
+  | "MOMENT_VERSION_CONFLICT"
   | "NOT_FOUND"
+  | "PRECONDITION_REQUIRED"
   | "RATE_LIMITED"
   | "SERVICE_UNAVAILABLE"
   | "UNAUTHORIZED"
@@ -98,6 +103,21 @@ export function errorResponse(
   );
 }
 
+export function momentVersionConflictResponse(
+  error: MomentConflictError,
+): Response {
+  return jsonResponse(
+    {
+      error: {
+        code: "MOMENT_VERSION_CONFLICT",
+        message: "This Moment changed after you loaded it.",
+        currentMoment: error.currentMoment,
+      },
+    },
+    412,
+  );
+}
+
 export function handleMomentApiError(error: unknown): Response {
   if (error instanceof SupabaseAuthenticationError) {
     return errorResponse(401, "UNAUTHORIZED", "Authentication is required.");
@@ -132,6 +152,20 @@ export function handleMomentApiError(error: unknown): Response {
     return errorResponse(404, "NOT_FOUND", "Moment not found.");
   }
 
+  if (
+    error instanceof MomentVersionConflictError &&
+    error.cleanupFailures.length > 0
+  ) {
+    console.error(
+      "Moment image compensation cleanup did not complete.",
+      error,
+    );
+  }
+
+  if (error instanceof MomentConflictError) {
+    return momentVersionConflictResponse(error);
+  }
+
   if (error instanceof LegacyImportSourceConflictError) {
     return errorResponse(
       409,
@@ -162,6 +196,39 @@ export function isValidMomentId(id: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
     id,
   );
+}
+
+export function readMomentRevisionPrecondition(
+  request: Request,
+): { success: true; revision: number } | { success: false; response: Response } {
+  const value = request.headers.get("x-moment-revision");
+
+  if (value === null) {
+    return {
+      success: false,
+      response: errorResponse(
+        428,
+        "PRECONDITION_REQUIRED",
+        "A current Moment revision is required.",
+      ),
+    };
+  }
+
+  const match = /^([1-9][0-9]*)$/.exec(value);
+  const revision = match ? Number(match[1]) : Number.NaN;
+
+  if (!Number.isSafeInteger(revision)) {
+    return {
+      success: false,
+      response: errorResponse(
+        400,
+        "INVALID_PRECONDITION",
+        "X-Moment-Revision must contain one current Moment revision.",
+      ),
+    };
+  }
+
+  return { success: true, revision };
 }
 
 export async function readJsonBody(

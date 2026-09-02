@@ -1,11 +1,13 @@
 import type { Moment } from "@/data/moments";
 import type { MomentRepository } from "@/repositories/moment-repository";
+import { MomentConflictError } from "@/repositories/moment-repository";
 
 type ApiErrorBody = {
   error: {
     code: string;
     message: string;
     fields?: Record<string, string>;
+    currentMoment?: unknown;
   };
 };
 
@@ -51,6 +53,8 @@ function isMoment(value: unknown): value is Moment {
 
   return (
     isNonEmptyString(candidate.id) &&
+    Number.isSafeInteger(candidate.revision) &&
+    Number(candidate.revision) >= 1 &&
     isNonEmptyString(candidate.date) &&
     isNonEmptyString(candidate.dateTime) &&
     isNonEmptyString(candidate.time) &&
@@ -182,6 +186,14 @@ export class ApiMomentRepository implements MomentRepository {
     const body = await readResponseJson(response);
 
     if (isApiErrorBody(body)) {
+      if (
+        response.status === 412 &&
+        body.error.code === "MOMENT_VERSION_CONFLICT" &&
+        isMoment(body.error.currentMoment)
+      ) {
+        throw new MomentConflictError(body.error.currentMoment);
+      }
+
       throw new ApiMomentRepositoryError(
         body.error.message,
         response.status,
@@ -248,6 +260,7 @@ export class ApiMomentRepository implements MomentRepository {
         endpoint,
         "PATCH",
         multipartBody(moment, "remove"),
+        moment.revision,
       );
     }
 
@@ -256,6 +269,7 @@ export class ApiMomentRepository implements MomentRepository {
         endpoint,
         "PATCH",
         multipartBody(moment, "replace"),
+        moment.revision,
       );
     }
 
@@ -270,9 +284,12 @@ export class ApiMomentRepository implements MomentRepository {
     );
   }
 
-  async delete(id: string): Promise<void> {
+  async delete(id: string, revision?: number): Promise<void> {
     await this.request(`/api/moments/${encodeURIComponent(id)}`, {
-      headers: { Accept: "application/json" },
+      headers: {
+        Accept: "application/json",
+        "X-Moment-Revision": this.momentRevisionHeader(revision),
+      },
       method: "DELETE",
     });
   }
@@ -287,6 +304,13 @@ export class ApiMomentRepository implements MomentRepository {
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
+        ...(method === "PATCH"
+          ? {
+              "X-Moment-Revision": this.momentRevisionHeader(
+                moment.revision,
+              ),
+            }
+          : {}),
       },
       method,
     });
@@ -311,10 +335,16 @@ export class ApiMomentRepository implements MomentRepository {
     input: string,
     method: "PATCH" | "POST",
     body: FormData,
+    revision?: number,
   ): Promise<Moment> {
     const response = await this.request(input, {
       body,
-      headers: { Accept: "application/json" },
+      headers: {
+        Accept: "application/json",
+        ...(method === "PATCH"
+          ? { "X-Moment-Revision": this.momentRevisionHeader(revision) }
+          : {}),
+      },
       method,
     });
     const responseBody = await readResponseJson(response);
@@ -332,5 +362,17 @@ export class ApiMomentRepository implements MomentRepository {
     }
 
     return savedMoment;
+  }
+
+  private momentRevisionHeader(revision: number | undefined): string {
+    if (!Number.isSafeInteger(revision) || Number(revision) < 1) {
+      throw new ApiMomentRepositoryError(
+        "A current Moment revision is required.",
+        undefined,
+        "INVALID_REVISION",
+      );
+    }
+
+    return String(revision);
   }
 }

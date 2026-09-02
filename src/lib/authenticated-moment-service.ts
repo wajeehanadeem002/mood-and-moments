@@ -1,12 +1,17 @@
 import type { Moment } from "@/data/moments";
 import type { MomentImageMutation } from "@/lib/moment-request-validation";
 import { sha256MomentImage } from "@/lib/moment-image-validation";
+import {
+  createMomentImagePath,
+  isOwnedMomentImagePath,
+} from "@/lib/moment-image-path";
 import type {
   StoredMomentImage,
   SupabaseMomentImageRepository,
 } from "@/repositories/supabase-moment-image-repository";
 import {
   MomentNotFoundError,
+  MomentVersionConflictError,
   type StoredMomentRecord,
   type SupabaseMomentRepository,
 } from "@/repositories/supabase-moment-repository";
@@ -14,16 +19,17 @@ import {
 type MomentStore = Pick<
   SupabaseMomentRepository,
   | "create"
-  | "delete"
+  | "authorizeImageCandidate"
+  | "completeImageCleanup"
+  | "deleteRecord"
   | "findRecordById"
   | "list"
-  | "update"
   | "updateWithImagePath"
 >;
 
 type MomentImageStore = Pick<
   SupabaseMomentImageRepository,
-  "download" | "remove" | "replace" | "restore" | "upload"
+  "download" | "remove" | "upload"
 >;
 
 export class MomentImageLifecycleError extends Error {
@@ -35,16 +41,6 @@ export class MomentImageLifecycleError extends Error {
     super(message, options);
     this.name = "MomentImageLifecycleError";
   }
-}
-
-function stableImagePath(userId: string, momentId: string) {
-  if (!userId || userId.includes("/")) {
-    throw new MomentImageLifecycleError(
-      "The authenticated user identity cannot be used for image storage.",
-    );
-  }
-
-  return `${userId}/${momentId}/image`;
 }
 
 async function runCleanup(
@@ -68,6 +64,8 @@ export class AuthenticatedMomentService {
     private readonly moments: MomentStore,
     private readonly images: MomentImageStore,
     private readonly userId: string,
+    private readonly createImageGeneration: () => string = () =>
+      crypto.randomUUID(),
   ) {}
 
   list(): Promise<Moment[]> {
@@ -85,20 +83,51 @@ export class AuthenticatedMomentService {
       return created;
     }
 
-    const path = stableImagePath(this.userId, created.id);
+    const revision = this.requireRevision(created);
+    const path = this.createImagePath(created.id);
 
     try {
+      await this.moments.authorizeImageCandidate(created.id, revision, path);
       await this.images.upload(path, image);
-      return await this.moments.updateWithImagePath(created, path, null);
+      return (
+        await this.moments.updateWithImagePath(created, path, null)
+      ).moment;
     } catch (cause) {
-      const cleanupFailures = await runCleanup([
-        () => this.images.remove(path),
-        () => this.moments.delete(created.id),
+      if (cause instanceof MomentVersionConflictError) {
+        const cleanupFailures = await this.cleanupImage(path);
+        throw new MomentVersionConflictError(
+          cause.currentMoment,
+          cleanupFailures,
+        );
+      }
+
+      try {
+        const latest = await this.moments.findRecordById(created.id);
+        if (latest?.imagePath === path && latest.revision > revision) {
+          return latest.moment;
+        }
+        if (latest && latest.revision !== revision) {
+          const cleanupFailures = await this.cleanupImage(path);
+          throw new MomentVersionConflictError(
+            latest.moment,
+            cleanupFailures,
+          );
+        }
+      } catch (reconciliationCause) {
+        if (reconciliationCause instanceof MomentVersionConflictError) {
+          throw reconciliationCause;
+        }
+      }
+
+      const cleanupFailures = await this.cleanupImage(path);
+
+      const rollbackFailures = await runCleanup([
+        () => this.moments.deleteRecord(created.id, revision),
       ]);
 
       throw new MomentImageLifecycleError(
         "Moment creation could not complete and was rolled back.",
-        cleanupFailures,
+        [...cleanupFailures, ...rollbackFailures],
         { cause },
       );
     }
@@ -128,7 +157,13 @@ export class AuthenticatedMomentService {
     const candidate = { ...moment, id };
 
     if (imageMutation.kind === "keep") {
-      return this.moments.update(candidate);
+      return (
+        await this.moments.updateWithImagePath(
+          candidate,
+          record.imagePath,
+          record.importImageHash,
+        )
+      ).moment;
     }
 
     if (imageMutation.kind === "remove") {
@@ -138,36 +173,47 @@ export class AuthenticatedMomentService {
     return this.replaceImage(record, candidate, imageMutation.image);
   }
 
-  async delete(id: string): Promise<void> {
+  async delete(id: string, revision: number): Promise<void> {
     const record = await this.moments.findRecordById(id);
+    if (!record) throw new MomentNotFoundError();
 
-    if (!record) {
-      throw new MomentNotFoundError();
-    }
-
-    if (!record.imagePath) {
-      await this.moments.delete(id);
-      return;
-    }
-
-    const path = this.requireStablePath(record);
-    const backup = await this.images.download(path);
-    let removalAttempted = false;
-
+    let deletion;
     try {
-      removalAttempted = true;
-      await this.images.remove(path);
-      await this.moments.delete(id);
+      deletion = await this.moments.deleteRecord(id, revision);
     } catch (cause) {
-      const cleanupFailures = removalAttempted
-        ? await runCleanup([() => this.images.restore(path, backup)])
-        : [];
+      if (cause instanceof MomentNotFoundError) throw cause;
+      if (cause instanceof MomentVersionConflictError) throw cause;
+
+      try {
+        const latest = await this.moments.findRecordById(id);
+        if (!latest) {
+          if (record.imagePath) {
+            await this.cleanupCommittedImage(record.imagePath);
+          }
+          return;
+        }
+        if (latest.revision !== revision) {
+          throw new MomentVersionConflictError(latest.moment);
+        }
+      } catch (reconciliationCause) {
+        if (reconciliationCause instanceof MomentVersionConflictError) {
+          throw reconciliationCause;
+        }
+        throw new MomentImageLifecycleError(
+          "Moment deletion could not be reconciled.",
+          [],
+          { cause: reconciliationCause },
+        );
+      }
 
       throw new MomentImageLifecycleError(
-        "Moment deletion could not complete and was rolled back.",
-        cleanupFailures,
+        "Moment deletion could not complete.",
+        [],
         { cause },
       );
+    }
+    if (deletion.cleanupPath) {
+      await this.cleanupCommittedImage(deletion.cleanupPath);
     }
   }
 
@@ -178,7 +224,7 @@ export class AuthenticatedMomentService {
       throw new MomentNotFoundError();
     }
 
-    return this.images.download(this.requireStablePath(record));
+    return this.images.download(this.requireOwnedPath(record));
   }
 
   private async replaceImage(
@@ -186,55 +232,71 @@ export class AuthenticatedMomentService {
     candidate: Moment,
     image: File,
   ): Promise<Moment> {
-    const path = stableImagePath(this.userId, candidate.id);
-    const backup = record.imagePath
-      ? await this.images.download(this.requireStablePath(record))
-      : null;
-    let textUpdated = false;
-    let objectMutationAttempted = false;
+    const path = this.createImagePath(candidate.id);
+    const revision = this.requireRevision(candidate);
+    let candidateAuthorized = false;
 
     try {
       const importImageHash =
         record.importSource === "legacy-localstorage-v1"
           ? await sha256MomentImage(image)
           : null;
-      const updated = await this.moments.update(candidate);
-      textUpdated = true;
-      objectMutationAttempted = true;
-
-      if (backup) {
-        await this.images.replace(path, image);
-      } else {
-        await this.images.upload(path, image);
-      }
-
-      return await this.moments.updateWithImagePath(
-        updated,
+      await this.moments.authorizeImageCandidate(
+        candidate.id,
+        revision,
+        path,
+      );
+      candidateAuthorized = true;
+      await this.images.upload(path, image);
+      const updated = await this.moments.updateWithImagePath(
+        candidate,
         path,
         importImageHash,
       );
+      if (updated.cleanupPath) {
+        await this.cleanupCommittedImage(updated.cleanupPath);
+      }
+      return updated.moment;
     } catch (cause) {
-      const cleanupActions: Array<() => Promise<unknown>> = [];
-
-      if (objectMutationAttempted) {
-        cleanupActions.push(
-          backup
-            ? () => this.images.restore(path, backup)
-            : () => this.images.remove(path),
+      if (cause instanceof MomentVersionConflictError) {
+        const cleanupFailures = candidateAuthorized
+          ? await this.cleanupImage(path)
+          : [];
+        throw new MomentVersionConflictError(
+          cause.currentMoment,
+          cleanupFailures,
         );
       }
 
-      if (textUpdated) {
-        cleanupActions.push(() =>
-          this.moments.updateWithImagePath(
-            record.moment,
-            record.imagePath,
-            record.importImageHash,
-          ),
-        );
+      if (candidateAuthorized) {
+        try {
+          const latest = await this.moments.findRecordById(candidate.id);
+          if (
+            latest?.imagePath === path &&
+            latest.revision > record.revision
+          ) {
+            if (record.imagePath) {
+              await this.cleanupCommittedImage(record.imagePath);
+            }
+            return latest.moment;
+          }
+          if (latest && latest.revision !== record.revision) {
+            const cleanupFailures = await this.cleanupImage(path);
+            throw new MomentVersionConflictError(
+              latest.moment,
+              cleanupFailures,
+            );
+          }
+        } catch (reconciliationCause) {
+          if (reconciliationCause instanceof MomentVersionConflictError) {
+            throw reconciliationCause;
+          }
+        }
       }
 
-      const cleanupFailures = await runCleanup(cleanupActions);
+      const cleanupFailures = candidateAuthorized
+        ? await this.cleanupImage(path)
+        : [];
 
       throw new MomentImageLifecycleError(
         "Moment image replacement could not complete and was rolled back.",
@@ -248,58 +310,111 @@ export class AuthenticatedMomentService {
     record: StoredMomentRecord,
     candidate: Moment,
   ): Promise<Moment> {
-    if (!record.imagePath) {
-      return this.moments.updateWithImagePath(candidate, null, null);
-    }
-
-    const path = this.requireStablePath(record);
-    const backup = await this.images.download(path);
-    let textUpdated = false;
-    let removalAttempted = false;
-
     try {
-      const updated = await this.moments.update(candidate);
-      textUpdated = true;
-      removalAttempted = true;
-      await this.images.remove(path);
-
-      return await this.moments.updateWithImagePath(updated, null, null);
+      const updated = await this.moments.updateWithImagePath(
+        candidate,
+        null,
+        null,
+      );
+      if (updated.cleanupPath) {
+        await this.cleanupCommittedImage(updated.cleanupPath);
+      }
+      return updated.moment;
     } catch (cause) {
-      const cleanupActions: Array<() => Promise<unknown>> = [];
-
-      if (removalAttempted) {
-        cleanupActions.push(() => this.images.restore(path, backup));
+      if (cause instanceof MomentVersionConflictError) {
+        throw cause;
       }
 
-      if (textUpdated) {
-        cleanupActions.push(() =>
-          this.moments.updateWithImagePath(
-            record.moment,
-            record.imagePath,
-            record.importImageHash,
-          ),
-        );
+      try {
+        const latest = await this.moments.findRecordById(candidate.id);
+        if (
+          latest &&
+          latest.revision > record.revision &&
+          latest.imagePath === null
+        ) {
+          if (record.imagePath) {
+            await this.cleanupCommittedImage(record.imagePath);
+          }
+          return latest.moment;
+        }
+        if (latest && latest.revision !== record.revision) {
+          throw new MomentVersionConflictError(latest.moment);
+        }
+      } catch (reconciliationCause) {
+        if (reconciliationCause instanceof MomentVersionConflictError) {
+          throw reconciliationCause;
+        }
       }
-
-      const cleanupFailures = await runCleanup(cleanupActions);
 
       throw new MomentImageLifecycleError(
         "Moment image removal could not complete and was rolled back.",
-        cleanupFailures,
+        [],
         { cause },
       );
     }
   }
 
-  private requireStablePath(record: StoredMomentRecord): string {
-    const expectedPath = stableImagePath(this.userId, record.moment.id);
+  private createImagePath(momentId: string): string {
+    try {
+      return createMomentImagePath(
+        this.userId,
+        momentId,
+        this.createImageGeneration(),
+      );
+    } catch (cause) {
+      throw new MomentImageLifecycleError(
+        "The authenticated Moment image path is invalid.",
+        [],
+        { cause },
+      );
+    }
+  }
 
-    if (record.imagePath !== expectedPath) {
+  private requireOwnedPath(record: StoredMomentRecord): string {
+    if (
+      !record.imagePath ||
+      !isOwnedMomentImagePath(
+        record.imagePath,
+        this.userId,
+        record.moment.id,
+      )
+    ) {
       throw new MomentImageLifecycleError(
         "The stored Moment image reference is invalid.",
       );
     }
 
-    return expectedPath;
+    return record.imagePath;
+  }
+
+  private requireRevision(moment: Moment): number {
+    if (!Number.isSafeInteger(moment.revision) || Number(moment.revision) < 1) {
+      throw new MomentImageLifecycleError(
+        "The current Moment revision is unavailable.",
+      );
+    }
+    return moment.revision!;
+  }
+
+  private async cleanupImage(path: string): Promise<unknown[]> {
+    const failures = await runCleanup([() => this.images.remove(path)]);
+    if (failures.length === 0) {
+      failures.push(
+        ...(await runCleanup([
+          () => this.moments.completeImageCleanup(path),
+        ])),
+      );
+    }
+    return failures;
+  }
+
+  private async cleanupCommittedImage(path: string): Promise<void> {
+    const failures = await this.cleanupImage(path);
+    if (failures.length > 0) {
+      console.error(
+        "Moment image cleanup remains durably authorized for retry.",
+        failures,
+      );
+    }
   }
 }

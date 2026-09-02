@@ -14,6 +14,8 @@ type RecentMomentsProps = {
   isMutationPending?: boolean;
   onEditMoment?: (moment: Moment) => void;
   onDeleteMoment?: (moment: Moment) => Promise<void>;
+  deleteConflictMomentId?: string | null;
+  onLoadLatestMoment?: () => void;
 };
 
 export function RecentMoments({
@@ -22,6 +24,8 @@ export function RecentMoments({
   isMutationPending = false,
   onEditMoment,
   onDeleteMoment,
+  deleteConflictMomentId = null,
+  onLoadLatestMoment,
 }: RecentMomentsProps) {
   const [confirmingMomentId, setConfirmingMomentId] = useState<string | null>(
     null,
@@ -158,6 +162,7 @@ export function RecentMoments({
             const isConfirmingDelete = confirmingMomentId === moment.id;
             const isDeleting = deletingMomentId === moment.id;
             const hasDeleteError = deleteErrorMomentId === moment.id;
+            const hasDeleteConflict = deleteConflictMomentId === moment.id;
 
             return (
               <article
@@ -259,14 +264,30 @@ export function RecentMoments({
                               role="alert"
                               className="mt-3 text-sm leading-6 text-rose-soft"
                             >
-                              We couldn’t delete this moment. Please try again.
+                              {hasDeleteConflict
+                                ? "This Moment changed in another session. Review the latest version before deleting."
+                                : "We couldn’t delete this moment. Please try again."}
                             </p>
+                          ) : null}
+                          {hasDeleteConflict && onLoadLatestMoment ? (
+                            <button
+                              type="button"
+                              className="mt-3 inline-flex min-h-11 items-center justify-center rounded-sm border border-rose/35 px-4 text-sm font-medium text-rose-soft transition hover:border-rose/60 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-soft/70"
+                              onClick={() => {
+                                onLoadLatestMoment();
+                                setConfirmingMomentId(null);
+                                setDeleteErrorMomentId(null);
+                              }}
+                            >
+                              Load latest Moment
+                            </button>
                           ) : null}
                         </form>
                       ) : (
                         <div className="flex flex-wrap justify-end gap-2">
                           <button
                             type="button"
+                            id={`edit-moment-${moment.id}`}
                             disabled={isMutationPending}
                             onClick={() => editMoment(moment)}
                             className="inline-flex min-h-11 items-center gap-2 rounded-sm border border-white/10 px-4 text-sm font-medium text-secondary transition hover:border-lavender/40 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-lavender/60 disabled:cursor-wait disabled:opacity-55"

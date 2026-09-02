@@ -6,6 +6,7 @@ import {
   MomentApiRateLimitExceededError,
   MomentApiRateLimitUnavailableError,
 } from "@/lib/moment-api-rate-limit";
+import { MomentVersionConflictError } from "@/repositories/supabase-moment-repository";
 
 import { handleMomentApiError } from "./moment-api-server";
 
@@ -97,6 +98,37 @@ describe("handleMomentApiError", () => {
     expect(response.status).toBe(500);
     expect(JSON.stringify(await response.json())).not.toContain(
       "private import cleanup detail",
+    );
+  });
+
+  it("logs failed loser-candidate cleanup while preserving the 412 contract", async () => {
+    const cleanupFailure = new Error("private loser cleanup detail");
+    const error = new MomentVersionConflictError(
+      {
+        id: "00000000-0000-4000-8000-000000000001",
+        revision: 2,
+        date: "Sep 1, 2026",
+        dateTime: "2026-09-01T09:15:00Z",
+        time: "9:15 AM",
+        mood: "calm",
+        title: "Another tab won",
+        excerpt: "The newer Moment stays authoritative.",
+      },
+      [cleanupFailure],
+    );
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+
+    const response = handleMomentApiError(error);
+
+    expect(consoleError).toHaveBeenCalledWith(
+      "Moment image compensation cleanup did not complete.",
+      error,
+    );
+    expect(response.status).toBe(412);
+    expect(JSON.stringify(await response.json())).not.toContain(
+      "private loser cleanup detail",
     );
   });
 });

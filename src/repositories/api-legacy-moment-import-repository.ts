@@ -64,6 +64,8 @@ function isMoment(value: unknown): value is Moment {
 
   return (
     isNonEmptyString(moment.id) &&
+    Number.isSafeInteger(moment.revision) &&
+    Number(moment.revision) >= 1 &&
     isNonEmptyString(moment.date) &&
     isNonEmptyString(moment.dateTime) &&
     isNonEmptyString(moment.time) &&

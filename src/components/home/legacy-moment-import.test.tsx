@@ -51,6 +51,7 @@ function momentFor(sourceId: string): Moment {
       : "00000000-0000-4000-8000-000000000002";
   return {
     id,
+    revision: 1,
     date: source.date ?? "Aug 27, 2026",
     dateTime: source.dateTime,
     time: source.time ?? "6:05 PM",

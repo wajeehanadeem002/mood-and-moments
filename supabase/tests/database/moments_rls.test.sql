@@ -157,25 +157,38 @@ select 11, is(
 insert into tap_results (test_number, result)
 select 12, results_eq(
   $$
-    with updated as (
-      update public.moments
-      set title = 'Compromised title'
-      where id = '00000000-0000-0000-0000-00000000000b'
-      returning id
+    select outcome
+    from public.update_moment_if_revision(
+      '00000000-0000-0000-0000-00000000000b',
+      1,
+      'Compromised title',
+      'A private moment owned by user B.',
+      'happy',
+      '2026-08-27',
+      null,
+      null
     )
-    select count(*)::bigint from updated
   $$,
-  $$values (0::bigint)$$,
+  $$values ('not_found'::text)$$,
   'user A cannot update user B moments'
 );
 
 insert into tap_results (test_number, result)
-select 13, lives_ok(
+select 13, results_eq(
   $$
-    update public.moments
-    set title = 'User A updated moment'
-    where id = '00000000-0000-0000-0000-00000000000a'
+    select outcome
+    from public.update_moment_if_revision(
+      '00000000-0000-0000-0000-00000000000a',
+      1,
+      'User A updated moment',
+      'A private moment owned by user A.',
+      'calm',
+      '2026-08-28',
+      null,
+      null
+    )
   $$,
+  $$values ('updated'::text)$$,
   'user A can update their own moment'
 );
 
@@ -183,6 +196,7 @@ insert into tap_results (test_number, result)
 select 14, ok(
   (
     select updated_at > created_at
+      and revision = 2
     from public.moments
     where id = '00000000-0000-0000-0000-00000000000a'
   ),
@@ -209,28 +223,26 @@ select 15, throws_ok(
 insert into tap_results (test_number, result)
 select 16, results_eq(
   $$
-    with deleted as (
-      delete from public.moments
-      where id = '00000000-0000-0000-0000-00000000000b'
-      returning id
+    select outcome
+    from public.delete_moment_if_revision(
+      '00000000-0000-0000-0000-00000000000b',
+      1
     )
-    select count(*)::bigint from deleted
   $$,
-  $$values (0::bigint)$$,
+  $$values ('not_found'::text)$$,
   'user A cannot delete user B moments'
 );
 
 insert into tap_results (test_number, result)
 select 17, results_eq(
   $$
-    with deleted as (
-      delete from public.moments
-      where title = 'JWT-owned moment'
-      returning id
+    select outcome
+    from public.delete_moment_if_revision(
+      (select id from public.moments where title = 'JWT-owned moment'),
+      (select revision from public.moments where title = 'JWT-owned moment')
     )
-    select count(*)::bigint from deleted
   $$,
-  $$values (1::bigint)$$,
+  $$values ('deleted'::text)$$,
   'user A can delete their own moment'
 );
 
@@ -485,6 +497,10 @@ select 34, ok(
   ),
   'ordinary cloud moments remain valid without an import image digest'
 );
+
+-- These transaction-local grants exercise the existing import-image integrity
+-- constraints directly. Production writes remain restricted to the H6 CAS RPC.
+grant update (image_path, import_image_hash) on public.moments to authenticated;
 
 set local role authenticated;
 set local "request.jwt.claims" = '{"sub":"user_a","role":"authenticated"}';

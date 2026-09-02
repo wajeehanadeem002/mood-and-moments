@@ -23,12 +23,14 @@ type MoodRitualProps = {
   isAuthenticated?: boolean;
   isMutationPending?: boolean;
   editingMoment?: Moment | null;
+  hasVersionConflict?: boolean;
   onCreateMoment: (draft: MomentDraft) => Promise<void>;
   onUpdateMoment?: (
     draft: MomentDraft,
     options: UpdateMomentOptions,
   ) => Promise<void>;
   onCancelEdit?: () => void;
+  onLoadLatestMoment?: () => void;
   onRequireAuthentication?: () => void;
 };
 
@@ -47,9 +49,11 @@ export function MoodRitual({
   isAuthenticated = true,
   isMutationPending = false,
   editingMoment = null,
+  hasVersionConflict = false,
   onCreateMoment,
   onUpdateMoment,
   onCancelEdit,
+  onLoadLatestMoment,
   onRequireAuthentication,
 }: MoodRitualProps) {
   const [selectedMoodId, setSelectedMoodId] = useState<MoodId>(
@@ -212,7 +216,13 @@ export function MoodRitual({
         kind: "success",
         message: isEditMode ? "Saving your changes…" : "Saving your moment…",
       }
-    : (feedback ??
+    : hasVersionConflict
+      ? {
+          kind: "error",
+          message:
+            "This Moment changed in another session. Your draft has not been overwritten.",
+        }
+      : (feedback ??
       (loadError
         ? {
             kind: "error",
@@ -470,6 +480,15 @@ export function MoodRitual({
           >
             {statusFeedback.message}
           </p>
+          {hasVersionConflict && onLoadLatestMoment ? (
+            <button
+              type="button"
+              className="mt-3 inline-flex min-h-11 items-center justify-center rounded-sm border border-rose/35 px-4 text-sm font-medium text-rose-soft transition hover:border-rose/60 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-soft/70"
+              onClick={onLoadLatestMoment}
+            >
+              Load latest Moment
+            </button>
+          ) : null}
         </div>
 
         <div className="mt-4 flex flex-col justify-center gap-3 sm:flex-row">

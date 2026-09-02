@@ -9,6 +9,7 @@ import {
 
 const savedMoment: Moment = {
   id: "92cd54b1-f61c-49f5-b4f6-f6ab99429741",
+  revision: 1,
   date: "Aug 28, 2026",
   dateTime: "2026-08-28T09:15:00Z",
   time: "9:15 AM",
@@ -134,6 +135,7 @@ describe("ApiMomentRepository", () => {
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
+          "X-Moment-Revision": "1",
         },
         method: "PATCH",
       },
@@ -153,29 +155,78 @@ describe("ApiMomentRepository", () => {
     const replacement = fetcher.mock.calls[0]![1]!.body as FormData;
     expect(replacement).toBeInstanceOf(FormData);
     expect(replacement.get("imageAction")).toBe("replace");
+    expect(replacement.get("revision")).toBeNull();
     expect(replacement.get("image")).toEqual(
       expect.objectContaining({ type: "image/png" }),
     );
+    expect(fetcher.mock.calls[0]![1]!.headers).toEqual({
+      Accept: "application/json",
+      "X-Moment-Revision": "1",
+    });
     const removal = fetcher.mock.calls[1]![1]!.body as FormData;
     expect(removal).toBeInstanceOf(FormData);
     expect(removal.get("imageAction")).toBe("remove");
+    expect(removal.get("revision")).toBeNull();
     expect(removal.get("image")).toBeNull();
+    expect(fetcher.mock.calls[1]![1]!.headers).toEqual({
+      Accept: "application/json",
+      "X-Moment-Revision": "1",
+    });
   });
 
   it("deletes through the owner-scoped API endpoint", async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     const repository = new ApiMomentRepository(fetcher as typeof fetch);
 
-    await expect(repository.delete(savedMoment.id)).resolves.toBeUndefined();
+    await expect(repository.delete(savedMoment.id, 1)).resolves.toBeUndefined();
 
     expect(fetcher).toHaveBeenNthCalledWith(
       1,
       `/api/moments/${savedMoment.id}`,
       {
-        headers: { Accept: "application/json" },
+        headers: { Accept: "application/json", "X-Moment-Revision": "1" },
         method: "DELETE",
       },
     );
+  });
+
+  it("preserves the server's current Moment in a typed version conflict", async () => {
+    const currentMoment = {
+      ...savedMoment,
+      revision: 2,
+      title: "Another tab won",
+    };
+    const { repository } = createRepository(
+      jsonResponse(
+        {
+          error: {
+            code: "MOMENT_VERSION_CONFLICT",
+            message: "This Moment changed after you loaded it.",
+            currentMoment,
+          },
+        },
+        412,
+      ),
+    );
+
+    await expect(repository.update(savedMoment)).rejects.toMatchObject({
+      name: "MomentConflictError",
+      currentMoment,
+    });
+  });
+
+  it("fails before the network when an update/delete lacks a revision", async () => {
+    const fetcher = vi.fn();
+    const repository = new ApiMomentRepository(fetcher as typeof fetch);
+    const unversioned = { ...savedMoment, revision: undefined };
+
+    await expect(repository.update(unversioned)).rejects.toMatchObject({
+      code: "INVALID_REVISION",
+    });
+    await expect(repository.delete(savedMoment.id)).rejects.toMatchObject({
+      code: "INVALID_REVISION",
+    });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   it("preserves structured API errors for the UI boundary", async () => {

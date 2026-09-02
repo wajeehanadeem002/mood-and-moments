@@ -174,6 +174,9 @@ export async function prepareUpdatedMoment(
     (options.removeImage ? undefined : existingMoment.image?.src);
   const moment: Moment = {
     id: existingMoment.id,
+    ...(existingMoment.revision
+      ? { revision: existingMoment.revision }
+      : {}),
     date: formatDate(draft.date),
     dateTime: `${draft.date}${existingMoment.dateTime.slice(10)}`,
     time: existingMoment.time,

@@ -15,6 +15,7 @@ export type MoodDefinition = {
 
 export type Moment = {
   id: string;
+  revision?: number;
   date: string;
   dateTime: string;
   time: string;

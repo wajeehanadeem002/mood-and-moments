@@ -6,12 +6,23 @@ export type SupabaseQueryResult = {
   error: null | { code?: string; message: string };
 };
 
-type SupabaseRpcResult = {
+export type SupabaseRpcResult = {
   data: unknown;
   error: null | { message: string };
 };
 
+type SupabaseClientDoubleOptions = {
+  rpcResults?: SupabaseRpcResult[];
+};
+
 export function createSupabaseClientDouble(
+  ...results: SupabaseQueryResult[]
+) {
+  return createConfiguredSupabaseClientDouble({}, ...results);
+}
+
+export function createConfiguredSupabaseClientDouble(
+  options: SupabaseClientDoubleOptions,
   ...results: SupabaseQueryResult[]
 ) {
   const queries: Array<{
@@ -26,6 +37,7 @@ export function createSupabaseClientDouble(
     update: ReturnType<typeof vi.fn>;
   }> = [];
   let resultIndex = 0;
+  let rpcResultIndex = 0;
   const rpc = vi.fn(
     async (
       _functionName: string,
@@ -37,7 +49,10 @@ export function createSupabaseClientDouble(
         import: 10,
       }[parameters?.requested_bucket ?? "read"];
 
-      return {
+      const configuredResult = options.rpcResults?.[rpcResultIndex];
+      rpcResultIndex += 1;
+
+      return configuredResult ?? {
         data: [
           {
             allowed: true,

@@ -23,9 +23,16 @@ import {
   ApiMomentRepository,
   ApiMomentRepositoryError,
 } from "@/repositories/api-moment-repository";
-import type { MomentRepository } from "@/repositories/moment-repository";
+import {
+  MomentConflictError,
+  type MomentRepository,
+} from "@/repositories/moment-repository";
 
 type HydrationState = "loading" | "ready" | "error";
+type MomentConflictState = {
+  operation: "delete" | "update";
+  currentMoment: Moment;
+};
 
 function sortMomentsNewestFirst(moments: readonly Moment[]): Moment[] {
   return [...moments].sort((left, right) =>
@@ -126,6 +133,9 @@ function MomentsExperienceSession({
     isAuthenticated || isAuthenticationLoading ? "loading" : "ready",
   );
   const [editingMomentId, setEditingMomentId] = useState<string | null>(null);
+  const [editorResetKey, setEditorResetKey] = useState(0);
+  const [momentConflict, setMomentConflict] =
+    useState<MomentConflictState | null>(null);
   const [isMutationPending, setIsMutationPending] = useState(false);
 
   useEffect(() => {
@@ -208,6 +218,7 @@ function MomentsExperienceSession({
       return;
     }
 
+    setMomentConflict(null);
     setEditingMomentId(savedMoment.id);
     window.requestAnimationFrame(() => {
       const editor = document.getElementById("moods");
@@ -233,12 +244,25 @@ function MomentsExperienceSession({
         throw new Error("Moment not found.");
       }
 
-      const updatedMoment = await updateMoment(
-        repositoryRef.current,
-        existingMoment,
-        draft,
-        options,
-      );
+      let updatedMoment;
+      try {
+        updatedMoment = await updateMoment(
+          repositoryRef.current,
+          existingMoment,
+          draft,
+          options,
+        );
+      } catch (error) {
+        if (error instanceof MomentConflictError) {
+          setMomentConflict({
+            operation: "update",
+            currentMoment: error.currentMoment,
+          });
+        }
+        throw error;
+      }
+
+      setMomentConflict(null);
       setSavedMoments((current) =>
         current.map((moment) =>
           moment.id === updatedMoment.id ? updatedMoment : moment,
@@ -261,7 +285,22 @@ function MomentsExperienceSession({
         throw new Error("Moment not found.");
       }
 
-      await repositoryRef.current.delete(savedMoment.id);
+      try {
+        await repositoryRef.current.delete(
+          savedMoment.id,
+          savedMoment.revision,
+        );
+      } catch (error) {
+        if (error instanceof MomentConflictError) {
+          setMomentConflict({
+            operation: "delete",
+            currentMoment: error.currentMoment,
+          });
+        }
+        throw error;
+      }
+
+      setMomentConflict(null);
       setSavedMoments((current) =>
         current.filter((candidate) => candidate.id !== savedMoment.id),
       );
@@ -283,6 +322,30 @@ function MomentsExperienceSession({
     });
   }
 
+  function loadLatestConflictedMoment() {
+    if (!momentConflict) return;
+
+    const operation = momentConflict.operation;
+    const latest = momentConflict.currentMoment;
+    setSavedMoments((current) =>
+      current.map((moment) => (moment.id === latest.id ? latest : moment)),
+    );
+    if (
+      operation === "update" &&
+      editingMomentId === latest.id
+    ) {
+      setEditorResetKey((current) => current + 1);
+    }
+    setMomentConflict(null);
+    window.requestAnimationFrame(() => {
+      const focusTargetId =
+        operation === "update"
+          ? "moment-title"
+          : `edit-moment-${latest.id}`;
+      document.getElementById(focusTargetId)?.focus();
+    });
+  }
+
   const editingMoment = editingMomentId
     ? (savedMoments.find((moment) => moment.id === editingMomentId) ?? null)
     : null;
@@ -300,14 +363,23 @@ function MomentsExperienceSession({
   return (
     <>
       <Hero
+        editorResetKey={editorResetKey}
         isHydrating={hydrationState === "loading"}
         loadError={hydrationState === "error"}
         isAuthenticated={isAuthenticated}
         isMutationPending={isMutationPending}
         editingMoment={editingMoment}
+        hasVersionConflict={
+          momentConflict?.operation === "update" &&
+          momentConflict.currentMoment.id === editingMoment?.id
+        }
         onCreateMoment={handleCreateMoment}
         onUpdateMoment={handleUpdateMoment}
-        onCancelEdit={() => setEditingMomentId(null)}
+        onCancelEdit={() => {
+          setEditingMomentId(null);
+          setMomentConflict(null);
+        }}
+        onLoadLatestMoment={loadLatestConflictedMoment}
         onRequireAuthentication={onRequireAuthentication}
       />
       {isAuthenticated && userId ? (
@@ -322,6 +394,12 @@ function MomentsExperienceSession({
         isMutationPending={isMutationPending}
         onEditMoment={handleEditMoment}
         onDeleteMoment={handleDeleteMoment}
+        deleteConflictMomentId={
+          momentConflict?.operation === "delete"
+            ? momentConflict.currentMoment.id
+            : null
+        }
+        onLoadLatestMoment={loadLatestConflictedMoment}
       />
       <MemoryTimeline moments={displayedTimelineMoments} />
     </>

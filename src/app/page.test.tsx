@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Moment } from "@/data/moments";
@@ -61,6 +67,7 @@ function momentFromInput(
 
   return {
     id,
+    revision: existing ? Number(existing.revision) + 1 : 1,
     date: formatDate(input.date),
     dateTime: `${input.date}${existing?.dateTime.slice(10) ?? "T09:15:00Z"}`,
     time: existing?.time ?? "9:15 AM",
@@ -244,6 +251,7 @@ describe("Mood & Moments homepage", () => {
     apiMoments = [
       {
         id: "4d21afdc-b9f1-4416-b43f-f7fe964b6786",
+        revision: 1,
         date: "Aug 29, 2026",
         dateTime: "2026-08-29T09:15:00Z",
         time: "9:15 AM",
@@ -273,6 +281,7 @@ describe("Mood & Moments homepage", () => {
     apiMoments = [
       {
         id: "8e4f4e48-5d8a-42ba-8f8b-5ae3ada4f440",
+        revision: 1,
         date: "Aug 30, 2026",
         dateTime: "2026-08-30T18:30:00Z",
         time: "6:30 PM",
@@ -310,6 +319,7 @@ describe("Mood & Moments homepage", () => {
     apiMoments = [
       {
         id: "c6e3bc70-967c-4be4-ae8d-bf2de4b01d3a",
+        revision: 1,
         date: "Aug 30, 2026",
         dateTime: "2026-08-30T19:00:00Z",
         time: "7:00 PM",
@@ -538,6 +548,7 @@ describe("Mood & Moments homepage", () => {
     apiMoments = [
       {
         id,
+        revision: 1,
         date: "Aug 29, 2026",
         dateTime: "2026-08-29T09:15:00Z",
         time: "9:15 AM",
@@ -770,7 +781,12 @@ describe("Mood & Moments homepage", () => {
 
   it("does not duplicate or unlock a static example with a colliding API id", async () => {
     apiMoments = [
-      { ...recentMoments[0], title: "An API collision", image: undefined },
+      {
+        ...recentMoments[0],
+        revision: 1,
+        title: "An API collision",
+        image: undefined,
+      },
     ];
 
     render(<Home />);
@@ -960,10 +976,120 @@ describe("Mood & Moments homepage", () => {
     expect(screen.getAllByText("First rain of the season")).toHaveLength(2);
   });
 
+  it("preserves an unsaved edit and explicitly loads the latest Moment after a 412", async () => {
+    render(<Home />);
+    await waitForCloudReady();
+    const createForm = fillMomentForm();
+    fireEvent.click(
+      within(createForm).getByRole("button", { name: "Create a Moment" }),
+    );
+    await screen.findByText("Your moment has been saved.");
+    const existing = apiMoments[0]!;
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit First rain of the season" }),
+    );
+    const editForm = screen.getByRole("form", { name: "Edit Moment" });
+    const title = within(editForm).getByLabelText("Moment title");
+    fireEvent.change(title, { target: { value: "My unsaved wording" } });
+    const currentMoment = {
+      ...existing,
+      revision: Number(existing.revision) + 1,
+      title: "The latest wording from another tab",
+    };
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: {
+            code: "MOMENT_VERSION_CONFLICT",
+            message: "This Moment changed after you loaded it.",
+            currentMoment,
+          },
+        },
+        412,
+      ),
+    );
+
+    fireEvent.click(within(editForm).getByRole("button", { name: "Save Changes" }));
+
+    const conflictAlert = await within(editForm).findByText(
+      "This Moment changed in another session. Your draft has not been overwritten.",
+    );
+    expect(conflictAlert.getAttribute("role")).toBe("alert");
+    expect((title as HTMLInputElement).value).toBe("My unsaved wording");
+    expect(screen.getAllByText("First rain of the season")).toHaveLength(2);
+
+    fireEvent.click(
+      within(editForm).getByRole("button", { name: "Load latest Moment" }),
+    );
+
+    expect(
+      await screen.findAllByText("The latest wording from another tab"),
+    ).toHaveLength(2);
+    expect(
+      (screen.getByLabelText("Moment title") as HTMLInputElement).value,
+    ).toBe("The latest wording from another tab");
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Moment title"),
+      ),
+    );
+  });
+
+  it("keeps a stale-delete card visible until the user loads the latest Moment", async () => {
+    render(<Home />);
+    await waitForCloudReady();
+    const createForm = fillMomentForm();
+    fireEvent.click(
+      within(createForm).getByRole("button", { name: "Create a Moment" }),
+    );
+    await screen.findByText("Your moment has been saved.");
+    const existing = apiMoments[0]!;
+    const currentMoment = {
+      ...existing,
+      revision: Number(existing.revision) + 1,
+      title: "Latest Moment before deletion",
+    };
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          error: {
+            code: "MOMENT_VERSION_CONFLICT",
+            message: "This Moment changed after you loaded it.",
+            currentMoment,
+          },
+        },
+        412,
+      ),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Delete First rain of the season" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    expect(
+      await screen.findByText(
+        "This Moment changed in another session. Review the latest version before deleting.",
+      ),
+    ).not.toBeNull();
+    expect(screen.getAllByText("First rain of the season")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Load latest Moment" }));
+
+    expect(await screen.findAllByText("Latest Moment before deletion")).toHaveLength(2);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", {
+          name: "Edit Latest Moment before deletion",
+        }),
+      ),
+    );
+  });
+
   it("hides private Moments on sign-out and reloads them after sign-in", async () => {
     apiMoments = [
       {
         id: "4d21afdc-b9f1-4416-b43f-f7fe964b6786",
+        revision: 1,
         date: "Aug 29, 2026",
         dateTime: "2026-08-29T09:15:00Z",
         time: "9:15 AM",

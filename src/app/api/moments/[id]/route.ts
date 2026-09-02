@@ -6,6 +6,7 @@ import {
   isMultipartRequest,
   isValidMomentId,
   jsonResponse,
+  readMomentRevisionPrecondition,
   readFormDataBody,
   readJsonBody,
 } from "@/lib/moment-api-server";
@@ -26,6 +27,11 @@ export async function PATCH(request: Request, context: MomentRouteContext) {
 
     if (!isValidMomentId(id)) {
       return errorResponse(400, "INVALID_ID", "Moment id is invalid.");
+    }
+
+    const precondition = readMomentRevisionPrecondition(request);
+    if (!precondition.success) {
+      return precondition.response;
     }
 
     let input;
@@ -95,7 +101,11 @@ export async function PATCH(request: Request, context: MomentRouteContext) {
     }, {
       removeImage: imageMutation.kind === "remove",
     });
-    const moment = await service.updateRecord(record, candidate, imageMutation);
+    const moment = await service.updateRecord(
+      record,
+      { ...candidate, revision: precondition.revision },
+      imageMutation,
+    );
 
     return jsonResponse({ moment });
   } catch (error) {
@@ -103,7 +113,7 @@ export async function PATCH(request: Request, context: MomentRouteContext) {
   }
 }
 
-export async function DELETE(_request: Request, context: MomentRouteContext) {
+export async function DELETE(request: Request, context: MomentRouteContext) {
   try {
     const service = await createAuthenticatedMomentService("mutation");
     const { id } = await context.params;
@@ -112,7 +122,12 @@ export async function DELETE(_request: Request, context: MomentRouteContext) {
       return errorResponse(400, "INVALID_ID", "Moment id is invalid.");
     }
 
-    await service.delete(id);
+    const precondition = readMomentRevisionPrecondition(request);
+    if (!precondition.success) {
+      return precondition.response;
+    }
+
+    await service.delete(id, precondition.revision);
 
     return new Response(null, {
       status: 204,

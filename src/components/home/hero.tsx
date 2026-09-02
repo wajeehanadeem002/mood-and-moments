@@ -8,29 +8,35 @@ import type {
 } from "@/lib/moment-creation";
 
 type HeroProps = {
+  editorResetKey?: number;
   isHydrating: boolean;
   loadError: boolean;
   isAuthenticated?: boolean;
   isMutationPending?: boolean;
   editingMoment?: Moment | null;
+  hasVersionConflict?: boolean;
   onCreateMoment: (draft: MomentDraft) => Promise<void>;
   onUpdateMoment?: (
     draft: MomentDraft,
     options: UpdateMomentOptions,
   ) => Promise<void>;
   onCancelEdit?: () => void;
+  onLoadLatestMoment?: () => void;
   onRequireAuthentication?: () => void;
 };
 
 export function Hero({
+  editorResetKey = 0,
   isHydrating,
   loadError,
   isAuthenticated = true,
   isMutationPending = false,
   editingMoment = null,
+  hasVersionConflict = false,
   onCreateMoment,
   onUpdateMoment,
   onCancelEdit,
+  onLoadLatestMoment,
   onRequireAuthentication,
 }: HeroProps) {
   return (
@@ -90,15 +96,21 @@ export function Hero({
         </div>
 
         <MoodRitual
-          key={editingMoment?.id ?? "create"}
+          key={
+            editingMoment
+              ? `${editingMoment.id}:${editorResetKey}`
+              : "create"
+          }
           isHydrating={isHydrating}
           loadError={loadError}
           isAuthenticated={isAuthenticated}
           isMutationPending={isMutationPending}
           editingMoment={editingMoment}
+          hasVersionConflict={hasVersionConflict}
           onCreateMoment={onCreateMoment}
           onUpdateMoment={onUpdateMoment}
           onCancelEdit={onCancelEdit}
+          onLoadLatestMoment={onLoadLatestMoment}
           onRequireAuthentication={onRequireAuthentication}
         />
       </div>
