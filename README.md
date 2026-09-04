@@ -53,6 +53,8 @@ pnpm test:db
 
 Authenticated Moment CRUD uses server-mediated Route Handlers, the RLS-backed Supabase PostgreSQL repository, and private Supabase Storage image lifecycle through an authenticated same-origin image proxy. Signed-in users may explicitly review and import legacy Moments from `mood-and-moments.moments.v1`; the app never reads that source on sign-in and never removes local records without a separate confirmation. Durable owner-scoped import identity makes retries safe, while malformed, failed, conflicted, changed, or image-incomplete records remain local for review.
 
+Signed-in users can also choose **Export my data** from the Clerk UserButton. Every export requires Clerk's strict session reverification, then consumes an owner-scoped allowance of two exports per 60 seconds before any data is read. The server returns a private, non-cacheable ZIP containing a versioned `manifest.json` and the user's original JPEG, PNG, and WebP Moment image bytes. Identity claims, raw Storage paths, and credentials are never included. Apply `supabase/migrations/20260904090000_add_account_export_rate_limit.sql` before enabling this route in a deployed environment.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

@@ -1,6 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-export type MomentApiRateLimitBucket = "read" | "mutation" | "import";
+export type MomentApiRateLimitBucket =
+  | "read"
+  | "mutation"
+  | "import"
+  | "export";
 
 export type MomentApiRateLimit = {
   limit: number;
@@ -12,6 +16,7 @@ const bucketLimits: Record<MomentApiRateLimitBucket, number> = {
   read: 120,
   mutation: 30,
   import: 10,
+  export: 2,
 };
 
 type RateLimitRow = {

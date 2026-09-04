@@ -4,11 +4,11 @@ import {
   Show,
   SignInButton,
   SignUpButton,
-  UserButton,
 } from "@clerk/nextjs";
 import { Menu, X } from "lucide-react";
 import { useState } from "react";
 
+import { AccountUserButton } from "@/components/account/account-export-action";
 import { BrandMark } from "@/components/ui/brand-mark";
 
 const navigation = [
@@ -82,14 +82,7 @@ export function SiteHeader() {
               Create a Moment
             </a>
             <div aria-label="Account" className="inline-flex items-center">
-              <UserButton
-                appearance={{
-                  elements: {
-                    avatarBox:
-                      "size-10 border border-champagne/30 shadow-[0_0_0_3px_rgba(255,255,255,0.03)]",
-                  },
-                }}
-              />
+              <AccountUserButton emphasized />
             </div>
           </Show>
         </div>
@@ -165,7 +158,7 @@ export function SiteHeader() {
               </li>
               <li className="flex min-h-12 items-center justify-between rounded-sm px-4 text-sm text-secondary">
                 <span>Account</span>
-                <UserButton />
+                <AccountUserButton />
               </li>
             </Show>
           </ul>

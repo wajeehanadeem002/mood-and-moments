@@ -28,6 +28,9 @@ describe("SiteHeader", () => {
     expect(screen.getByRole("button", { name: "Sign in" })).not.toBeNull();
     expect(screen.getByRole("button", { name: "Sign up" })).not.toBeNull();
     expect(screen.queryByLabelText("Account")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Export my data" }),
+    ).toBeNull();
   });
 
   it("shows the account control and creation action when signed in", () => {
@@ -35,9 +38,17 @@ describe("SiteHeader", () => {
 
     expect(screen.getByLabelText("Account")).not.toBeNull();
     expect(
+      screen.getAllByRole("button", { name: "Export my data" }),
+    ).toHaveLength(1);
+    expect(
       screen.getByRole("link", { name: "Create a Moment" }),
     ).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Sign up" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+    expect(
+      screen.getAllByRole("button", { name: "Export my data" }),
+    ).toHaveLength(2);
   });
 });

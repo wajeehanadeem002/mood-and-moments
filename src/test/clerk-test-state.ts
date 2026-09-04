@@ -4,6 +4,11 @@ export type ClerkTestAuthState = {
   userId: string | null;
 };
 
+export type ClerkTestReverificationOperation = () => Promise<unknown>;
+export type ClerkTestReverificationWrapper = (
+  operation: ClerkTestReverificationOperation,
+) => Promise<unknown>;
+
 const defaultAuthState: ClerkTestAuthState = {
   isLoaded: true,
   isSignedIn: true,
@@ -14,6 +19,12 @@ export const clerkTestAuthState: ClerkTestAuthState = {
   ...defaultAuthState,
 };
 
+export const clerkTestReverificationState: {
+  wrapper: ClerkTestReverificationWrapper | null;
+} = {
+  wrapper: null,
+};
+
 export function setClerkTestAuthState(
   state: Partial<ClerkTestAuthState>,
 ) {
@@ -22,4 +33,11 @@ export function setClerkTestAuthState(
 
 export function resetClerkTestAuthState() {
   Object.assign(clerkTestAuthState, defaultAuthState);
+  clerkTestReverificationState.wrapper = null;
+}
+
+export function setClerkTestReverificationWrapper(
+  wrapper: ClerkTestReverificationWrapper,
+) {
+  clerkTestReverificationState.wrapper = wrapper;
 }

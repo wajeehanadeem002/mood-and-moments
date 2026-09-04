@@ -9,7 +9,7 @@ create temporary table tap_results (
 
 grant insert on table tap_results to anon, authenticated;
 
-select plan(21);
+select plan(25);
 
 insert into tap_results (test_number, result)
 select 1, has_table(
@@ -248,6 +248,54 @@ select 21, throws_ok(
   '42501',
   'permission denied for table moment_api_rate_limits',
   'authenticated users cannot reset or alter counters directly'
+);
+
+reset role;
+
+set local role authenticated;
+set local "request.jwt.claims" = '{"sub":"user_a","role":"authenticated"}';
+
+insert into tap_results (test_number, result)
+select 22, results_eq(
+  $$
+    select allowed, limit_value, remaining
+    from public.consume_moment_api_rate_limit('export')
+  $$,
+  $$values (true, 2, 1)$$,
+  'user A receives the first export allowance from the two-request bucket'
+);
+
+insert into tap_results (test_number, result)
+select 23, results_eq(
+  $$
+    select allowed, limit_value, remaining
+    from public.consume_moment_api_rate_limit('export')
+  $$,
+  $$values (true, 2, 0)$$,
+  'user A receives the second and final export allowance'
+);
+
+insert into tap_results (test_number, result)
+select 24, results_eq(
+  $$
+    select allowed, limit_value, remaining,
+      retry_after_seconds between 1 and 60
+    from public.consume_moment_api_rate_limit('export')
+  $$,
+  $$values (false, 2, 0, true)$$,
+  'a third export is denied with bounded retry metadata'
+);
+
+set local "request.jwt.claims" = '{"sub":"user_b","role":"authenticated"}';
+
+insert into tap_results (test_number, result)
+select 25, results_eq(
+  $$
+    select allowed, limit_value, remaining
+    from public.consume_moment_api_rate_limit('export')
+  $$,
+  $$values (true, 2, 1)$$,
+  'another Clerk subject has an independent export allowance'
 );
 
 reset role;

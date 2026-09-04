@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { vi } from "vitest";
 
 export type SupabaseQueryResult = {
+  count?: number | null;
   data: unknown;
   error: null | { code?: string; message: string };
 };
@@ -32,6 +33,7 @@ export function createConfiguredSupabaseClientDouble(
     is: ReturnType<typeof vi.fn>;
     maybeSingle: ReturnType<typeof vi.fn>;
     order: ReturnType<typeof vi.fn>;
+    range: ReturnType<typeof vi.fn>;
     select: ReturnType<typeof vi.fn>;
     single: ReturnType<typeof vi.fn>;
     update: ReturnType<typeof vi.fn>;
@@ -41,12 +43,15 @@ export function createConfiguredSupabaseClientDouble(
   const rpc = vi.fn(
     async (
       _functionName: string,
-      parameters?: { requested_bucket?: "read" | "mutation" | "import" },
+      parameters?: {
+        requested_bucket?: "read" | "mutation" | "import" | "export";
+      },
     ): Promise<SupabaseRpcResult> => {
       const limit = {
         read: 120,
         mutation: 30,
         import: 10,
+        export: 2,
       }[parameters?.requested_bucket ?? "read"];
 
       const configuredResult = options.rpcResults?.[rpcResultIndex];
@@ -76,6 +81,7 @@ export function createConfiguredSupabaseClientDouble(
       is: vi.fn(),
       maybeSingle: vi.fn(async () => result),
       order: vi.fn(),
+      range: vi.fn(async () => result),
       select: vi.fn(),
       single: vi.fn(async () => result),
       then: (
