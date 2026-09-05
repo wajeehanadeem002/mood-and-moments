@@ -2,8 +2,10 @@
 
 import { UserButton, useReverification } from "@clerk/nextjs";
 import { isReverificationCancelledError } from "@clerk/nextjs/errors";
-import { Download } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Download, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { AccountDataDeletionDialog } from "@/components/account/account-data-deletion-action";
 
 type ExportAuthorizationResult =
   | { authorized: true }
@@ -131,6 +133,7 @@ export function AccountUserButton({
 }: {
   emphasized?: boolean;
 }) {
+  const accountButtonContainer = useRef<HTMLSpanElement>(null);
   const inProgress = useRef(false);
   const isMounted = useRef(true);
   const downloadAbort = useRef<AbortController | null>(null);
@@ -139,7 +142,13 @@ export function AccountUserButton({
   const [status, setStatus] = useState("");
   const [isError, setIsError] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const authorizeExport = useReverification(requestExportAuthorization);
+  const restoreAccountButtonFocus = useCallback(() => {
+    accountButtonContainer.current
+      ?.querySelector<HTMLButtonElement>("button")
+      ?.focus();
+  }, []);
 
   useEffect(() => {
     isMounted.current = true;
@@ -220,7 +229,8 @@ export function AccountUserButton({
   }
 
   return (
-    <span className="inline-flex items-center">
+    <>
+      <span className="inline-flex items-center" ref={accountButtonContainer}>
       <UserButton
         appearance={
           emphasized
@@ -239,6 +249,11 @@ export function AccountUserButton({
             labelIcon={<Download aria-hidden="true" className="size-4" />}
             onClick={handleAction}
           />
+          <UserButton.Action
+            label="Delete my Mood & Moments data"
+            labelIcon={<Trash2 aria-hidden="true" className="size-4" />}
+            onClick={() => setIsDeleteDialogOpen(true)}
+          />
         </UserButton.MenuItems>
       </UserButton>
       <span
@@ -248,6 +263,14 @@ export function AccountUserButton({
       >
         {status}
       </span>
-    </span>
+      </span>
+      {isDeleteDialogOpen ? (
+        <AccountDataDeletionDialog
+          open
+          onClose={() => setIsDeleteDialogOpen(false)}
+          restoreFocus={restoreAccountButtonFocus}
+        />
+      ) : null}
+    </>
   );
 }

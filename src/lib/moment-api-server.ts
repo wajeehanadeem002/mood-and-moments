@@ -23,9 +23,11 @@ import {
 import { MomentConflictError } from "@/repositories/moment-repository";
 
 type ApiErrorCode =
+  | "ACCOUNT_DATA_DELETION_INCOMPLETE"
   | "INTERNAL_ERROR"
   | "INVALID_ID"
   | "INVALID_FORM_DATA"
+  | "INVALID_CONFIRMATION"
   | "INVALID_JSON"
   | "INVALID_PRECONDITION"
   | "IMPORT_SOURCE_CONFLICT"

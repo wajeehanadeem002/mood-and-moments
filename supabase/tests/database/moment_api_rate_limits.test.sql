@@ -9,7 +9,7 @@ create temporary table tap_results (
 
 grant insert on table tap_results to anon, authenticated;
 
-select plan(25);
+select plan(29);
 
 insert into tap_results (test_number, result)
 select 1, has_table(
@@ -297,6 +297,50 @@ select 25, results_eq(
   $$,
   $$values (true, 2, 1)$$,
   'another Clerk subject has an independent export allowance'
+);
+
+set local "request.jwt.claims" = '{"sub":"delete_test_user_a","role":"authenticated"}';
+
+insert into tap_results (test_number, result)
+select 26, results_eq(
+  $$
+    select allowed, limit_value, remaining
+    from public.consume_moment_api_rate_limit('delete-data')
+  $$,
+  $$values (true, 2, 1)$$,
+  'account data deletion has a dedicated two-request bucket'
+);
+
+insert into tap_results (test_number, result)
+select 27, results_eq(
+  $$
+    select allowed, limit_value, remaining
+    from public.consume_moment_api_rate_limit('delete-data')
+  $$,
+  $$values (true, 2, 0)$$,
+  'the second account data deletion request reaches its exact boundary'
+);
+
+insert into tap_results (test_number, result)
+select 28, results_eq(
+  $$
+    select allowed, limit_value, remaining
+    from public.consume_moment_api_rate_limit('delete-data')
+  $$,
+  $$values (false, 2, 0)$$,
+  'a third account data deletion request is denied'
+);
+
+set local "request.jwt.claims" = '{"sub":"delete_test_user_b","role":"authenticated"}';
+
+insert into tap_results (test_number, result)
+select 29, results_eq(
+  $$
+    select allowed, limit_value, remaining
+    from public.consume_moment_api_rate_limit('delete-data')
+  $$,
+  $$values (true, 2, 1)$$,
+  'another Clerk subject has an independent account deletion allowance'
 );
 
 reset role;

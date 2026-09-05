@@ -117,6 +117,21 @@ describe("AccountUserButton export action", () => {
     );
   });
 
+  it("exposes the separate cloud-data deletion account action without changing export", () => {
+    vi.stubGlobal("fetch", vi.fn());
+    installDownloadSpies();
+
+    render(<AccountUserButton />);
+
+    expect(screen.getByRole("button", { name: "Export my data" })).not.toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Delete my Mood & Moments data",
+      }),
+    );
+    expect(screen.getByRole("dialog", { name: "Delete cloud data" })).not.toBeNull();
+  });
+
   it("prevents duplicate export authorization while one is in progress", () => {
     const fetchMock = vi.fn(() => new Promise<Response>(() => undefined));
     vi.stubGlobal("fetch", fetchMock);

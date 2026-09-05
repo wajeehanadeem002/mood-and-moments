@@ -44,7 +44,12 @@ export function createConfiguredSupabaseClientDouble(
     async (
       _functionName: string,
       parameters?: {
-        requested_bucket?: "read" | "mutation" | "import" | "export";
+        requested_bucket?:
+          | "read"
+          | "mutation"
+          | "import"
+          | "export"
+          | "delete-data";
       },
     ): Promise<SupabaseRpcResult> => {
       const limit = {
@@ -52,6 +57,7 @@ export function createConfiguredSupabaseClientDouble(
         mutation: 30,
         import: 10,
         export: 2,
+        "delete-data": 2,
       }[parameters?.requested_bucket ?? "read"];
 
       const configuredResult = options.rpcResults?.[rpcResultIndex];

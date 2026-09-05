@@ -94,6 +94,31 @@ describe("enforceMomentApiRateLimit", () => {
     });
   });
 
+  it("uses an independent two-request account-data deletion bucket", async () => {
+    const { client, rpc } = clientWithRpc({
+      data: [
+        {
+          allowed: true,
+          limit_value: 2,
+          remaining: 1,
+          retry_after_seconds: 60,
+        },
+      ],
+      error: null,
+    });
+
+    await expect(
+      enforceMomentApiRateLimit(client, "delete-data"),
+    ).resolves.toEqual({
+      limit: 2,
+      remaining: 1,
+      retryAfterSeconds: 60,
+    });
+    expect(rpc).toHaveBeenCalledWith("consume_moment_api_rate_limit", {
+      requested_bucket: "delete-data",
+    });
+  });
+
   it("rejects an exceeded bucket with the database-owned limit metadata", async () => {
     const { client } = clientWithRpc({
       data: [

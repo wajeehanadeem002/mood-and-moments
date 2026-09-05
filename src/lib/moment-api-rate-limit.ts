@@ -4,7 +4,8 @@ export type MomentApiRateLimitBucket =
   | "read"
   | "mutation"
   | "import"
-  | "export";
+  | "export"
+  | "delete-data";
 
 export type MomentApiRateLimit = {
   limit: number;
@@ -17,6 +18,7 @@ const bucketLimits: Record<MomentApiRateLimitBucket, number> = {
   mutation: 30,
   import: 10,
   export: 2,
+  "delete-data": 2,
 };
 
 type RateLimitRow = {

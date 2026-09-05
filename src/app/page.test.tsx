@@ -729,7 +729,14 @@ describe("Mood & Moments homepage", () => {
 
     await waitForCloudReady();
     expect(screen.queryByRole("button", { name: /^Edit / })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Delete / })).toBeNull();
+    for (const moment of recentMoments) {
+      expect(
+        screen.queryByRole("button", { name: `Delete ${moment.title}` }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: `Delete ${moment.title}?` }),
+      ).toBeNull();
+    }
   });
 
   it("keeps static Moments public and makes no private data calls when signed out", async () => {

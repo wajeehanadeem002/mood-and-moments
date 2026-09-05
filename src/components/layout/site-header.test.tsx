@@ -41,6 +41,11 @@ describe("SiteHeader", () => {
       screen.getAllByRole("button", { name: "Export my data" }),
     ).toHaveLength(1);
     expect(
+      screen.getAllByRole("button", {
+        name: "Delete my Mood & Moments data",
+      }),
+    ).toHaveLength(1);
+    expect(
       screen.getByRole("link", { name: "Create a Moment" }),
     ).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
@@ -49,6 +54,11 @@ describe("SiteHeader", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
     expect(
       screen.getAllByRole("button", { name: "Export my data" }),
+    ).toHaveLength(2);
+    expect(
+      screen.getAllByRole("button", {
+        name: "Delete my Mood & Moments data",
+      }),
     ).toHaveLength(2);
   });
 });
