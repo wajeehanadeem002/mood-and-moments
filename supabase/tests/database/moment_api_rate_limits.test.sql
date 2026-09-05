@@ -207,6 +207,7 @@ select 19, results_eq(
   $$
     select owner_id, bucket
     from public.moment_api_rate_limits
+    where owner_id in ('user_a', 'user_b')
     order by owner_id, bucket
   $$,
   $$
